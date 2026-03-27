@@ -1,0 +1,12 @@
+numpy==1.26.4
+
+/home/total/ai/torch-2.9.1+rocm7.2.0.lw.git7e1940d4-cp312-cp312-linux_x86_64.whl
+/home/total/ai/torchvision-0.24.0+rocm7.2.0.gitb919bd0c-cp312-cp312-linux_x86_64.whl
+/home/total/ai/triton-3.5.1+rocm7.2.0.gita272dfa8-cp312-cp312-linux_x86_64.whl
+
+transformers>=4.57.6
+accelerate>=0.34.0
+huggingface_hub>=0.25.0
+pillow>=10.0.0
+safetensors>=0.4.5
+qwen-vl-utils==0.0.14
