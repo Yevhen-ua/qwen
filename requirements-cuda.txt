@@ -1,0 +1,18 @@
+numpy==1.26.4
+
+# Install the NVIDIA/CUDA PyTorch build separately for your CUDA version.
+# Example:
+#   pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+#
+# Optional:
+#   pip install flash-attn
+#
+# The code falls back to SDPA when FlashAttention 2 is not available.
+
+transformers>=4.57.6
+accelerate>=0.34.0
+huggingface_hub>=0.25.0
+pillow>=10.0.0
+safetensors>=0.4.5
+qwen-vl-utils==0.0.14
+jsonschema>=4.23.0

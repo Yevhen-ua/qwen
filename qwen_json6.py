@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import re
 import string
 from copy import deepcopy
 from pathlib import Path
@@ -9,9 +8,24 @@ from typing import Any
 
 from PIL import Image
 
+from qwen_logging import log_event, log_retry
+from qwen_parser import call_parser, clean_single_line_text, extract_json, extract_requested_input_length
+from qwen_prompts import (
+    SYSTEM_TEXT_VISION,
+    build_drag_prompt,
+    build_exists_prompt,
+    build_point_prompt,
+)
+from qwen_schemas import (
+    validate_drag_output as validate_drag_output_schema,
+    validate_exists_output as validate_exists_output_schema,
+    validate_point_output as validate_point_output_schema,
+)
 from raw_answer_point import draw
 
-os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
+REQUESTED_BACKEND = os.environ.get("QWEN_BACKEND", "auto").strip().lower()
+if REQUESTED_BACKEND == "rocm":
+    os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
 
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -19,59 +33,84 @@ from qwen_vl_utils import process_vision_info
 
 MODEL_PATH = os.environ.get("QWEN_MODEL_PATH", "./models/Qwen3-VL-8B-Instruct")
 
-# Prefer FlashAttention 2 when available, otherwise fall back safely.
-ATTN_IMPLEMENTATION = "sdpa"
-try:
-    import flash_attn  # noqa: F401
-
-    ATTN_IMPLEMENTATION = "flash_attention_2"
-except Exception:
-    pass
-
 # Image resizing control for Qwen3-VL.
 IMAGE_MIN_PIXELS = 256 * 256
 IMAGE_MAX_PIXELS = 1200 * 1200
 
 MAX_NEW_TOKENS = 120
-MAX_REASON_WORDS = 12
 NORMALIZED_COORD_MAX = 1000
 DEFAULT_RANDOM_TEXT_LENGTH = 12
+BACKEND_ALIASES = {"auto", "cpu", "cuda", "rocm"}
 
-if torch.cuda.is_available():
+
+def detect_runtime_backend() -> str:
+    if torch.cuda.is_available():
+        if getattr(torch.version, "hip", None):
+            return "rocm"
+        if getattr(torch.version, "cuda", None):
+            return "cuda"
+        return "gpu"
+    return "cpu"
+
+
+def resolve_dtype(backend: str) -> torch.dtype:
+    if backend == "cpu":
+        return torch.float32
     if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
-        DTYPE = torch.bfloat16
-    else:
-        DTYPE = torch.float16
+        return torch.bfloat16
+    return torch.float16
+
+
+def resolve_attn_implementation(backend: str) -> str:
+    if backend == "cpu":
+        return "sdpa"
+    try:
+        import flash_attn  # noqa: F401
+
+        return "flash_attention_2"
+    except Exception:
+        return "sdpa"
+
+
+if REQUESTED_BACKEND not in BACKEND_ALIASES:
+    raise ValueError("QWEN_BACKEND must be one of: auto, cpu, cuda, rocm")
+
+RUNTIME_BACKEND = detect_runtime_backend()
+if REQUESTED_BACKEND == "auto":
+    ACTIVE_BACKEND = RUNTIME_BACKEND
+elif REQUESTED_BACKEND == "cpu":
+    ACTIVE_BACKEND = "cpu"
+elif RUNTIME_BACKEND != REQUESTED_BACKEND:
+    raise RuntimeError(
+        f"Requested backend '{REQUESTED_BACKEND}' is not available. "
+        f"Detected backend: '{RUNTIME_BACKEND}'."
+    )
 else:
-    DTYPE = torch.float32
+    ACTIVE_BACKEND = REQUESTED_BACKEND
+
+DEVICE_MAP = "cpu" if ACTIVE_BACKEND == "cpu" else "auto"
+DTYPE = resolve_dtype(ACTIVE_BACKEND)
+ATTN_IMPLEMENTATION = resolve_attn_implementation(ACTIVE_BACKEND)
 
 model = AutoModelForImageTextToText.from_pretrained(
     MODEL_PATH,
     dtype=DTYPE,
-    device_map="auto",
+    device_map=DEVICE_MAP,
     attn_implementation=ATTN_IMPLEMENTATION,
 )
 processor = AutoProcessor.from_pretrained(MODEL_PATH)
-
-SYSTEM_TEXT_PARSE = (
-    "You convert a user's natural-language UI command into a strict internal task. "
-    "Return exactly one valid JSON object and nothing else. "
-    "Preserve only attributes that the user explicitly requested or clearly implied. "
-    "Keep visible text snippets exactly as written, including Cyrillic, Latin letters, digits, and punctuation. "
-    "Do not invent missing color, type, state, label, placeholder, or destination details. "
-    "If the command is ambiguous, return status='ambiguous' instead of guessing."
+log_event(
+    "runtime.config",
+    payload={
+        "requested_backend": REQUESTED_BACKEND,
+        "detected_backend": RUNTIME_BACKEND,
+        "active_backend": ACTIVE_BACKEND,
+        "device_map": DEVICE_MAP,
+        "dtype": str(DTYPE),
+        "attn_implementation": ATTN_IMPLEMENTATION,
+        "model_path": MODEL_PATH,
+    },
 )
-
-SYSTEM_TEXT_VISION = (
-    "You analyze exactly one screenshot of a website or web application. "
-    "Return exactly one valid JSON object and nothing else. "
-    "Use only information visibly present in the screenshot. "
-    "The provided internal task is the source of truth. "
-    "Every non-null attribute in the internal task must match. "
-    "If there is no exact visible match, return not_found. "
-    "If several candidates still match and the target is not uniquely determined, return ambiguous."
-)
-
 
 def normalize_mode(mode: str) -> str:
     value = mode.strip().lower()
@@ -89,48 +128,9 @@ def normalize_mode(mode: str) -> str:
     return aliases[value]
 
 
-def limit_reason_words(text: str, max_words: int = MAX_REASON_WORDS) -> str:
-    text = re.sub(r"\s+", " ", text.strip())
-    words = text.split()
-    return " ".join(words[:max_words])
-
-
-def clean_single_line_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip())
-
-
-def extract_requested_input_length(question: str) -> int | None:
-    patterns = [
-        r"length\s+of\s+(\d+)\s*(?:symbols?|chars?|characters?)",
-        r"(\d+)\s*(?:symbols?|chars?|characters?)",
-        r"довжин[аою]\s+(\d+)\s*(?:символ(?:ів|и)?|знаків?)",
-        r"(\d+)\s*(?:символ(?:ів|и)?|знаків?)",
-    ]
-    q = question.lower()
-    for pattern in patterns:
-        match = re.search(pattern, q, flags=re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-    return None
-
-
 def random_text(length: int) -> str:
     alphabet = string.ascii_lowercase + string.digits
     return "".join(random.choice(alphabet) for _ in range(length))
-
-
-def extract_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```\s*$", "", text)
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError(f"JSON object not found in model output: {text!r}")
-
-    raw = text[start : end + 1]
-    return json.loads(raw)
 
 
 def get_model_device() -> torch.device:
@@ -180,11 +180,13 @@ def build_generation_config() -> Any:
 
 
 def run_text_model(messages: list[dict[str, Any]]) -> str:
+    log_event("text_model.messages", payload=messages)
     text = processor.apply_chat_template(
         messages,
         tokenize=False,
         add_generation_prompt=True,
     )
+    log_event("text_model.prompt", payload=text)
     inputs = processor(
         text=text,
         return_tensors="pt",
@@ -206,10 +208,19 @@ def run_text_model(messages: list[dict[str, Any]]) -> str:
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
-    return str(output_text[0]).strip()
+    result = str(output_text[0]).strip()
+    log_event("text_model.output", payload=result)
+    return result
 
 
 def run_vision_model(image_path: str, user_text: str) -> str:
+    log_event(
+        "vision_model.request",
+        payload={
+            "image_path": image_path,
+            "prompt": user_text,
+        },
+    )
     messages = [
         {
             "role": "system",
@@ -257,307 +268,42 @@ def run_vision_model(image_path: str, user_text: str) -> str:
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
-    return str(output_text[0]).strip()
-
-
-def build_parse_prompt(mode: str, question: str, requested_input_length: int | None = None) -> str:
-    if mode in {"yes_no", "point"}:
-        return (
-            "Return exactly one JSON object:\n"
-            '{"status":"ok","target_description":"...","comment":"short"}\n'
-            "Fields:\n"
-            "- status: ok or ambiguous\n"
-            "- target_description: a short strict internal description for screenshot grounding\n"
-            "- comment: short reason\n"
-            "Rules:\n"
-            "- preserve only attributes that are explicit or clearly implied\n"
-            "- preserve visible text exactly as written\n"
-            "- do not invent missing color, type, state, label, or position\n"
-            "- if the user says there/туди/сюди without enough context, use ambiguous\n"
-            "- target_description should be one short phrase, not a full sentence\n"
-            f"Mode: {mode}\n"
-            f"User command: {question}"
-        )
-
-    if mode == "input":
-        length_hint = ""
-        if requested_input_length is not None:
-            length_hint = f"- if random text is requested and length is unclear, use random_length={requested_input_length}\\n"
-
-        return (
-            "Return exactly one JSON object:\n"
-            '{"status":"ok","target_description":"...","input_text":"","generate_random_text":false,'
-            '"random_length":null,"comment":"short"}\n'
-            "Fields:\n"
-            "- status: ok or ambiguous\n"
-            "- target_description: strict description of the editable input field\n"
-            "- input_text: literal text to type, or empty string if not explicitly provided\n"
-            "- generate_random_text: true only if the user explicitly asks for random text\n"
-            "- random_length: integer length for random text, or null\n"
-            "- comment: short reason\n"
-            "Rules:\n"
-            "- preserve visible labels, placeholders, or exact text exactly as written\n"
-            "- do not use a label as the target itself; the target is the editable field\n"
-            "- if the command does not identify a unique target field, use ambiguous\n"
-            "- if the command asks for random text, keep input_text empty and set generate_random_text=true\n"
-            "- if the command provides literal text to enter, copy it exactly into input_text\n"
-            f"{length_hint}"
-            f"User command: {question}"
-        )
-
-    if mode == "drag":
-        return (
-            "Return exactly one JSON object:\n"
-            '{"status":"ok","source_description":"...","destination_description":"...","comment":"short"}\n'
-            "Fields:\n"
-            "- status: ok or ambiguous\n"
-            "- source_description: strict description of what should be dragged\n"
-            "- destination_description: strict description of where it should be dropped\n"
-            "- comment: short reason\n"
-            "Rules:\n"
-            "- both source_description and destination_description must be present for status=ok\n"
-            "- preserve explicit text exactly as written\n"
-            "- do not invent missing source or destination details\n"
-            "- if the command does not identify both endpoints clearly enough, use ambiguous\n"
-            f"User command: {question}"
-        )
-
-    raise ValueError("Unsupported mode")
-
-
-def build_exists_prompt(target_description: str) -> str:
-    return (
-        "Return exactly one JSON object:\n"
-        '{"status":"found","comment":"short"}\n'
-        "Fields:\n"
-        "- status: found, not_found, or ambiguous\n"
-        "- comment: short reason\n"
-        "Rules:\n"
-        "- use the internal task as the source of truth\n"
-        "- the target must satisfy all attributes in the description\n"
-        "- if any required attribute is missing or mismatched, return not_found\n"
-        "- if several candidates still match, return ambiguous\n"
-        f"Internal task: {target_description}"
-    )
-
-
-def build_point_prompt(target_description: str) -> str:
-    return (
-        "Return exactly one JSON object:\n"
-        '{"status":"found","x":500,"y":500,"comment":"short"}\n'
-        "Fields:\n"
-        f"- status: found, not_found, or ambiguous\n"
-        f"- x: integer from 0 to {NORMALIZED_COORD_MAX}, or null\n"
-        f"- y: integer from 0 to {NORMALIZED_COORD_MAX}, or null\n"
-        "- comment: short reason\n"
-        "Rules:\n"
-        "- return normalized coordinates across the full image\n"
-        "- return the center of the target element itself\n"
-        "- for buttons, use the center of the clickable button rectangle\n"
-        "- for input fields, use the center of the editable text box\n"
-        "- do not return a nearby label, icon, text, or container\n"
-        "- if any required attribute is missing or mismatched, return not_found with nulls\n"
-        "- if several candidates still match, return ambiguous with nulls\n"
-        "- never return coordinates for a merely similar element\n"
-        f"Internal task: {target_description}"
-    )
-
-
-def build_drag_prompt(source_description: str, destination_description: str) -> str:
-    return (
-        "Return exactly one JSON object:\n"
-        '{"status":"found","x":500,"y":500,"x2":800,"y2":500,"comment":"short"}\n'
-        "Fields:\n"
-        f"- status: found, not_found, or ambiguous\n"
-        f"- x, y, x2, y2: integers from 0 to {NORMALIZED_COORD_MAX}, or null\n"
-        "- comment: short reason\n"
-        "Rules:\n"
-        "- x,y is the center of the draggable source element\n"
-        "- x2,y2 is the center of the destination drop point or destination element\n"
-        "- both endpoints must match exactly\n"
-        "- if either endpoint is missing, return not_found with nulls\n"
-        "- if either endpoint is ambiguous, return ambiguous with nulls\n"
-        "- never use a similar element as a fallback\n"
-        f"Source task: {source_description}\n"
-        f"Destination task: {destination_description}"
-    )
-
-
-def validate_parser_output(data: dict[str, Any], mode: str) -> dict[str, Any]:
-    status = data.get("status")
-    if status not in {"ok", "ambiguous"}:
-        raise ValueError("parser status must be 'ok' or 'ambiguous'")
-
-    if mode in {"yes_no", "point"}:
-        if set(data.keys()) != {"status", "target_description", "comment"}:
-            raise ValueError("unexpected parser keys for yes_no/point")
-        target_description = data["target_description"]
-        comment = data["comment"]
-        if not (target_description is None or isinstance(target_description, str)):
-            raise ValueError("target_description must be string or null")
-        if not isinstance(comment, str):
-            raise ValueError("comment must be string")
-        return {
-            "status": status,
-            "target_description": clean_single_line_text(target_description or "") or None,
-            "comment": limit_reason_words(comment),
-        }
-
-    if mode == "input":
-        required_keys = {
-            "status",
-            "target_description",
-            "input_text",
-            "generate_random_text",
-            "random_length",
-            "comment",
-        }
-        if set(data.keys()) != required_keys:
-            raise ValueError("unexpected parser keys for input")
-        if not (data["target_description"] is None or isinstance(data["target_description"], str)):
-            raise ValueError("target_description must be string or null")
-        if not isinstance(data["input_text"], str):
-            raise ValueError("input_text must be string")
-        if not isinstance(data["generate_random_text"], bool):
-            raise ValueError("generate_random_text must be boolean")
-        if not (data["random_length"] is None or isinstance(data["random_length"], int)):
-            raise ValueError("random_length must be integer or null")
-        if not isinstance(data["comment"], str):
-            raise ValueError("comment must be string")
-        return {
-            "status": status,
-            "target_description": clean_single_line_text(data["target_description"] or "") or None,
-            "input_text": clean_single_line_text(data["input_text"]),
-            "generate_random_text": data["generate_random_text"],
-            "random_length": data["random_length"],
-            "comment": limit_reason_words(data["comment"]),
-        }
-
-    if mode == "drag":
-        if set(data.keys()) != {"status", "source_description", "destination_description", "comment"}:
-            raise ValueError("unexpected parser keys for drag")
-        if not (data["source_description"] is None or isinstance(data["source_description"], str)):
-            raise ValueError("source_description must be string or null")
-        if not (data["destination_description"] is None or isinstance(data["destination_description"], str)):
-            raise ValueError("destination_description must be string or null")
-        if not isinstance(data["comment"], str):
-            raise ValueError("comment must be string")
-        return {
-            "status": status,
-            "source_description": clean_single_line_text(data["source_description"] or "") or None,
-            "destination_description": clean_single_line_text(data["destination_description"] or "") or None,
-            "comment": limit_reason_words(data["comment"]),
-        }
-
-    raise ValueError("Unsupported mode")
+    result = str(output_text[0]).strip()
+    log_event("vision_model.output", payload=result)
+    return result
 
 
 def validate_exists_output(data: dict[str, Any]) -> dict[str, Any]:
-    if set(data.keys()) != {"status", "comment"}:
-        raise ValueError("unexpected keys for exists output")
-    if data["status"] not in {"found", "not_found", "ambiguous"}:
-        raise ValueError("exists status must be found/not_found/ambiguous")
-    if not isinstance(data["comment"], str):
-        raise ValueError("comment must be string")
+    validated = validate_exists_output_schema(data)
+    log_event("exists.validated", payload=validated)
     return {
-        "status": data["status"],
-        "comment": limit_reason_words(data["comment"]),
+        "status": validated["status"],
+        "comment": validated["comment"],
     }
 
 
-def _validate_normalized_int(value: Any, field_name: str) -> None:
-    if value is None:
-        return
-    if not isinstance(value, int):
-        raise ValueError(f"{field_name} must be integer or null")
-    if not (0 <= value <= NORMALIZED_COORD_MAX):
-        raise ValueError(f"{field_name} must be in [0, {NORMALIZED_COORD_MAX}]")
-
-
 def validate_point_output(data: dict[str, Any]) -> dict[str, Any]:
-    if set(data.keys()) != {"status", "x", "y", "comment"}:
-        raise ValueError("unexpected keys for point output")
-    if data["status"] not in {"found", "not_found", "ambiguous"}:
-        raise ValueError("point status must be found/not_found/ambiguous")
-    if not isinstance(data["comment"], str):
-        raise ValueError("comment must be string")
-    _validate_normalized_int(data["x"], "x")
-    _validate_normalized_int(data["y"], "y")
-    if data["status"] != "found" and (data["x"] is not None or data["y"] is not None):
-        raise ValueError("non-found point output must use null coordinates")
-    if data["status"] == "found" and (data["x"] is None or data["y"] is None):
-        raise ValueError("found point output must include coordinates")
+    validated = validate_point_output_schema(data, NORMALIZED_COORD_MAX)
+    log_event("point.validated", payload=validated)
     return {
-        "status": data["status"],
-        "x": data["x"],
-        "y": data["y"],
-        "comment": limit_reason_words(data["comment"]),
+        "status": validated["status"],
+        "x": validated["x"],
+        "y": validated["y"],
+        "comment": validated["comment"],
     }
 
 
 def validate_drag_output(data: dict[str, Any]) -> dict[str, Any]:
-    if set(data.keys()) != {"status", "x", "y", "x2", "y2", "comment"}:
-        raise ValueError("unexpected keys for drag output")
-    if data["status"] not in {"found", "not_found", "ambiguous"}:
-        raise ValueError("drag status must be found/not_found/ambiguous")
-    if not isinstance(data["comment"], str):
-        raise ValueError("comment must be string")
-    for field_name in ("x", "y", "x2", "y2"):
-        _validate_normalized_int(data[field_name], field_name)
-    if data["status"] != "found" and any(data[k] is not None for k in ("x", "y", "x2", "y2")):
-        raise ValueError("non-found drag output must use null coordinates")
-    if data["status"] == "found" and any(data[k] is None for k in ("x", "y", "x2", "y2")):
-        raise ValueError("found drag output must include all coordinates")
+    validated = validate_drag_output_schema(data, NORMALIZED_COORD_MAX)
+    log_event("drag.validated", payload=validated)
     return {
-        "status": data["status"],
-        "x": data["x"],
-        "y": data["y"],
-        "x2": data["x2"],
-        "y2": data["y2"],
-        "comment": limit_reason_words(data["comment"]),
+        "status": validated["status"],
+        "x": validated["x"],
+        "y": validated["y"],
+        "x2": validated["x2"],
+        "y2": validated["y2"],
+        "comment": validated["comment"],
     }
-
-
-def call_parser(question: str, mode: str, max_retries: int = 3) -> dict[str, Any]:
-    requested_input_length = extract_requested_input_length(question) if mode == "input" else None
-    last_error: Exception | None = None
-    last_raw_text: str | None = None
-    retry_feedback = ""
-
-    for _attempt in range(1, max_retries + 1):
-        user_prompt = build_parse_prompt(mode, question, requested_input_length)
-        if retry_feedback:
-            user_prompt += (
-                "\n\nPrevious output was invalid.\n"
-                f"Validation error: {retry_feedback}\n"
-                "Return valid JSON only."
-            )
-
-        messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": SYSTEM_TEXT_PARSE}],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": user_prompt}],
-            },
-        ]
-
-        try:
-            raw_text = run_text_model(messages)
-            last_raw_text = raw_text
-            data = extract_json(raw_text)
-            return validate_parser_output(data, mode)
-        except Exception as exc:
-            last_error = exc
-            retry_feedback = str(exc)
-
-    raise RuntimeError(
-        f"Parser failed after {max_retries} attempts. "
-        f"Last error: {last_error}. "
-        f"Last raw output: {last_raw_text!r}"
-    )
 
 
 def call_exists(image_path: str, target_description: str, max_retries: int = 3) -> dict[str, Any]:
@@ -573,14 +319,27 @@ def call_exists(image_path: str, target_description: str, max_retries: int = 3) 
                 f"Validation error: {retry_feedback}\n"
                 "Return valid JSON only."
             )
+        log_event(
+            "exists.request",
+            f"attempt {_attempt}/{max_retries}",
+            {
+                "image_path": image_path,
+                "target_description": target_description,
+                "prompt": prompt,
+            },
+        )
         try:
             raw_text = run_vision_model(image_path, prompt)
             last_raw_text = raw_text
             data = extract_json(raw_text)
-            return validate_exists_output(data)
+            log_event("exists.json", payload=data)
+            validated = validate_exists_output(data)
+            log_event("exists.result", payload=validated)
+            return validated
         except Exception as exc:
             last_error = exc
             retry_feedback = str(exc)
+            log_retry("exists", _attempt, max_retries, exc, last_raw_text)
 
     raise RuntimeError(
         f"Exists check failed after {max_retries} attempts. "
@@ -595,21 +354,34 @@ def call_point(image_path: str, target_description: str, max_retries: int = 3) -
     retry_feedback = ""
 
     for _attempt in range(1, max_retries + 1):
-        prompt = build_point_prompt(target_description)
+        prompt = build_point_prompt(target_description, NORMALIZED_COORD_MAX)
         if retry_feedback:
             prompt += (
                 "\n\nPrevious output was invalid.\n"
                 f"Validation error: {retry_feedback}\n"
                 "Return valid JSON only."
             )
+        log_event(
+            "point.request",
+            f"attempt {_attempt}/{max_retries}",
+            {
+                "image_path": image_path,
+                "target_description": target_description,
+                "prompt": prompt,
+            },
+        )
         try:
             raw_text = run_vision_model(image_path, prompt)
             last_raw_text = raw_text
             data = extract_json(raw_text)
-            return validate_point_output(data)
+            log_event("point.json", payload=data)
+            validated = validate_point_output(data)
+            log_event("point.result", payload=validated)
+            return validated
         except Exception as exc:
             last_error = exc
             retry_feedback = str(exc)
+            log_retry("point", _attempt, max_retries, exc, last_raw_text)
 
     raise RuntimeError(
         f"Point localization failed after {max_retries} attempts. "
@@ -624,21 +396,39 @@ def call_drag(image_path: str, source_description: str, destination_description:
     retry_feedback = ""
 
     for _attempt in range(1, max_retries + 1):
-        prompt = build_drag_prompt(source_description, destination_description)
+        prompt = build_drag_prompt(
+            source_description,
+            destination_description,
+            NORMALIZED_COORD_MAX,
+        )
         if retry_feedback:
             prompt += (
                 "\n\nPrevious output was invalid.\n"
                 f"Validation error: {retry_feedback}\n"
                 "Return valid JSON only."
             )
+        log_event(
+            "drag.request",
+            f"attempt {_attempt}/{max_retries}",
+            {
+                "image_path": image_path,
+                "source_description": source_description,
+                "destination_description": destination_description,
+                "prompt": prompt,
+            },
+        )
         try:
             raw_text = run_vision_model(image_path, prompt)
             last_raw_text = raw_text
             data = extract_json(raw_text)
-            return validate_drag_output(data)
+            log_event("drag.json", payload=data)
+            validated = validate_drag_output(data)
+            log_event("drag.result", payload=validated)
+            return validated
         except Exception as exc:
             last_error = exc
             retry_feedback = str(exc)
+            log_retry("drag", _attempt, max_retries, exc, last_raw_text)
 
     raise RuntimeError(
         f"Drag localization failed after {max_retries} attempts. "
@@ -668,7 +458,7 @@ def yes_no_result(answer: bool, comment: str) -> dict[str, Any]:
     return {
         "mode": "yes_no",
         "answer": answer,
-        "comment": limit_reason_words(comment),
+        "comment": comment,
     }
 
 
@@ -676,7 +466,7 @@ def point_result(mode: str, answer: dict[str, Any], comment: str) -> dict[str, A
     return {
         "mode": mode,
         "answer": answer,
-        "comment": clean_single_line_text(comment),
+        "comment": comment,
     }
 
 
@@ -693,8 +483,15 @@ def resolve_input_text(parsed: dict[str, Any], fallback_question: str) -> str:
         length = parsed["random_length"]
         if length is None:
             length = extract_requested_input_length(fallback_question) or DEFAULT_RANDOM_TEXT_LENGTH
-        return random_text(length)
-    return clean_single_line_text(parsed["input_text"])
+        generated = random_text(length)
+        log_event(
+            "input.generated_text",
+            payload={"length": length, "text": generated},
+        )
+        return generated
+    resolved = clean_single_line_text(parsed["input_text"])
+    log_event("input.literal_text", payload=resolved)
+    return resolved
 
 
 def ask_image_json(
@@ -705,52 +502,82 @@ def ask_image_json(
 ) -> dict[str, Any]:
     image_path = str(Path(image_path).expanduser().resolve())
     mode = normalize_mode(mode)
+    log_event(
+        "ask.start",
+        payload={
+            "image_path": image_path,
+            "question": question,
+            "mode": mode,
+            "max_retries": max_retries,
+        },
+    )
 
-    parsed = call_parser(question, mode, max_retries=max_retries)
+    parsed = call_parser(question, mode, run_text_model, max_retries=max_retries)
+    log_event("ask.parsed", payload=parsed)
 
     if mode == "yes_no":
         if parsed["status"] != "ok" or not parsed["target_description"]:
-            return yes_no_result(False, parsed["comment"] or "ambiguous command")
+            result = yes_no_result(False, parsed["comment"] or "ambiguous command")
+            log_event("ask.result", payload=result)
+            return result
 
         exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
-        return yes_no_result(exists["status"] == "found", exists["comment"])
+        result = yes_no_result(exists["status"] == "found", exists["comment"])
+        log_event("ask.result", payload=result)
+        return result
 
     if mode == "point":
         if parsed["status"] != "ok" or not parsed["target_description"]:
-            return point_result("point", null_xy(), parsed["comment"] or "ambiguous command")
+            result = point_result("point", null_xy(), parsed["comment"] or "ambiguous command")
+            log_event("ask.result", payload=result)
+            return result
 
         exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
         if exists["status"] != "found":
-            return point_result("point", null_xy(), exists["comment"])
+            result = point_result("point", null_xy(), exists["comment"])
+            log_event("ask.result", payload=result)
+            return result
 
         point = call_point(image_path, parsed["target_description"], max_retries=max_retries)
         if point["status"] != "found" or point["x"] is None or point["y"] is None:
-            return point_result("point", null_xy(), point["comment"])
+            result = point_result("point", null_xy(), point["comment"])
+            log_event("ask.result", payload=result)
+            return result
 
-        return point_result(
+        result = point_result(
             "point",
             normalized_to_pixels(point["x"], point["y"], image_path),
             point["comment"],
         )
+        log_event("ask.result", payload=result)
+        return result
 
     if mode == "input":
         if parsed["status"] != "ok" or not parsed["target_description"]:
-            return point_result("input", null_xy(), parsed["comment"] or "ambiguous command")
+            result = point_result("input", null_xy(), parsed["comment"] or "ambiguous command")
+            log_event("ask.result", payload=result)
+            return result
 
         exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
         if exists["status"] != "found":
-            return point_result("input", null_xy(), exists["comment"])
+            result = point_result("input", null_xy(), exists["comment"])
+            log_event("ask.result", payload=result)
+            return result
 
         point = call_point(image_path, parsed["target_description"], max_retries=max_retries)
         if point["status"] != "found" or point["x"] is None or point["y"] is None:
-            return point_result("input", null_xy(), point["comment"])
+            result = point_result("input", null_xy(), point["comment"])
+            log_event("ask.result", payload=result)
+            return result
 
         input_text = resolve_input_text(parsed, question)
-        return point_result(
+        result = point_result(
             "input",
             normalized_to_pixels(point["x"], point["y"], image_path),
             input_text,
         )
+        log_event("ask.result", payload=result)
+        return result
 
     if mode == "drag":
         if (
@@ -758,15 +585,21 @@ def ask_image_json(
             or not parsed["source_description"]
             or not parsed["destination_description"]
         ):
-            return point_result("drag", null_drag(), parsed["comment"] or "ambiguous command")
+            result = point_result("drag", null_drag(), parsed["comment"] or "ambiguous command")
+            log_event("ask.result", payload=result)
+            return result
 
         source_exists = call_exists(image_path, parsed["source_description"], max_retries=max_retries)
         if source_exists["status"] != "found":
-            return point_result("drag", null_drag(), f"source {source_exists['comment']}")
+            result = point_result("drag", null_drag(), f"source {source_exists['comment']}")
+            log_event("ask.result", payload=result)
+            return result
 
         destination_exists = call_exists(image_path, parsed["destination_description"], max_retries=max_retries)
         if destination_exists["status"] != "found":
-            return point_result("drag", null_drag(), f"destination {destination_exists['comment']}")
+            result = point_result("drag", null_drag(), f"destination {destination_exists['comment']}")
+            log_event("ask.result", payload=result)
+            return result
 
         drag = call_drag(
             image_path,
@@ -775,9 +608,11 @@ def ask_image_json(
             max_retries=max_retries,
         )
         if drag["status"] != "found":
-            return point_result("drag", null_drag(), drag["comment"])
+            result = point_result("drag", null_drag(), drag["comment"])
+            log_event("ask.result", payload=result)
+            return result
 
-        return point_result(
+        result = point_result(
             "drag",
             normalized_drag_to_pixels(
                 drag["x"],
@@ -788,6 +623,8 @@ def ask_image_json(
             ),
             drag["comment"],
         )
+        log_event("ask.result", payload=result)
+        return result
 
     raise ValueError("Unsupported mode")
 
@@ -800,16 +637,16 @@ if __name__ == "__main__":
         ("yes_no", 'Logo with sad face should be in top left corner of image'),
         ("yes_no", 'Logo with text "ROZETKA" should be in top left corner of image'),
         ("yes_no", 'Logo with text "fjgdfkj" should be in top left corner of image'),
-        ("yes_no", 'Is there a green button with text "Знайти" visible on the screenshot?'),
-        ("yes_no", 'Is there a red button with text "Знайти" visible on the screenshot?'),
-        ("point", 'Point to green button with text "Знайти"'),
-        ("point", 'Point to rectangular button with text "Знайти"'),
-        ("point", 'Point to red button with text "Знайти"'),
-        ("point", 'Point to round button with text "Знайти"'),
+        ("yes_no", 'Is there a green button with text "Find" visible on the screenshot?'),
+        ("yes_no", 'Is there a red button with text "Find" visible on the screenshot?'),
+        ("point", 'Point to green button with text "Find"'),
+        ("point", 'Point to rectangular button with text "Find"'),
+        ("point", 'Point to red button with text "Find"'),
+        ("point", 'Point to round button with text "Find"'),
         ("point", "Return the center point of the Upload button",),
-        ("input", 'input some random text with length of 12 symbols in input box below Бренд label'),
+        ("input", 'input some random text with length of 12 symbols in input box below Brand label'),
         ("drag", 'Drag the left handle of the price slider to the middle of the slider track'),
-        ("drag", 'Drag the left handle of the "ціна" slider to the middle of the slider track')
+        ("drag", 'Drag the left handle of the "price" slider to the middle of the slider track')
     ]
 
     i = 0
