@@ -1,9 +1,6 @@
 Bootstrap: docker
 From: ubuntu:22.04
 
-%files
-    requirements-cuda.txt /tmp/requirements-cuda.txt
-
 %post
     set -eux
 
@@ -28,9 +25,6 @@ From: ubuntu:22.04
         --index-url https://download.pytorch.org/whl/cu126 \
         torch
 
-    python3 -m pip install --no-cache-dir -r /tmp/requirements-cuda.txt
-    rm -f /tmp/requirements-cuda.txt
-
     mkdir -p /workspace /hf-cache
 
 %environment
@@ -48,4 +42,4 @@ From: ubuntu:22.04
 %test
     set -eux
     /usr/bin/python3 --version
-    /usr/bin/python3 -c "import torch, transformers, accelerate; print(torch.__version__); print(transformers.__version__); print(accelerate.__version__)"
+    /usr/bin/python3 -c "import torch; print(torch.__version__)"

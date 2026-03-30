@@ -1,9 +1,6 @@
 Bootstrap: docker
 From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
-%files
-    requirements-cuda.txt /tmp/requirements-cuda.txt
-
 %post
     set -eux
 
@@ -30,9 +27,6 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
         torch \
         torchvision
 
-    python3 -m pip install --no-cache-dir -r /tmp/requirements-cuda.txt
-    rm -f /tmp/requirements-cuda.txt
-
     mkdir -p /workspace /models /hf-cache /outputs
 
 %environment
@@ -50,4 +44,4 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 %test
     set -eux
     /usr/bin/python3 --version
-    /usr/bin/python3 -c "import torch, transformers, accelerate; print(torch.__version__); print(transformers.__version__); print(accelerate.__version__)"
+    /usr/bin/python3 -c "import torch; print(torch.__version__)"
