@@ -21,6 +21,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     rm -rf /var/lib/apt/lists/*
 
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+    python3 -m pip install --no-cache-dir uv
 
     python3 -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu126 \
@@ -44,4 +45,5 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 %test
     set -eux
     /usr/bin/python3 --version
+    uv --version
     /usr/bin/python3 -c "import torch; print(torch.__version__)"
