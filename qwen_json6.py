@@ -6,11 +6,12 @@ import string
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from PIL import Image
 
-from qwen_logging import log_event, log_retry
+from qwen_logging import log_event, log_resource_snapshot, log_retry
 from qwen_parser6 import call_parser, clean_single_line_text, extract_json, extract_requested_input_length
 from qwen_prompts import (
     SYSTEM_TEXT_VISION,
@@ -114,6 +115,7 @@ log_event(
         "model_path": MODEL_PATH,
     },
 )
+log_resource_snapshot("runtime.resources", torch_module=torch, model=model)
 
 def normalize_mode(mode: str) -> str:
     value = mode.strip().lower()
@@ -140,6 +142,12 @@ def get_model_device() -> torch.device:
     if hasattr(model, "device") and model.device is not None:
         return model.device
     return next(model.parameters()).device
+
+
+def synchronize_device() -> None:
+    if torch.cuda.is_available():
+        for device_index in range(torch.cuda.device_count()):
+            torch.cuda.synchronize(device_index)
 
 
 def get_image_patch_size() -> int:
@@ -216,22 +224,38 @@ def run_text_model(messages: list[dict[str, Any]]) -> str:
     )
     inputs.pop("token_type_ids", None)
     inputs = inputs.to(get_model_device())
+    input_token_count = int(inputs.input_ids.shape[-1])
 
+    synchronize_device()
+    started_at = perf_counter()
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
             generation_config=build_generation_config(),
         )
+    synchronize_device()
+    elapsed_ms = round((perf_counter() - started_at) * 1000, 2)
 
     generated_ids_trimmed = [
         out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
+    output_token_count = sum(len(out_ids) for out_ids in generated_ids_trimmed)
     output_text = processor.batch_decode(
         generated_ids_trimmed,
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
     result = str(output_text[0]).strip()
+    log_resource_snapshot(
+        "text_model.perf",
+        torch_module=torch,
+        model=model,
+        extra={
+            "elapsed_ms": elapsed_ms,
+            "input_tokens": input_token_count,
+            "output_tokens": output_token_count,
+        },
+    )
     log_event("text_model.output", payload=result)
     return result
 
@@ -277,21 +301,39 @@ def run_vision_model(image_path: str, user_text: str) -> str:
     inputs.pop("token_type_ids", None)
     inputs = inputs.to(get_model_device())
 
+    synchronize_device()
+    started_at = perf_counter()
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
             generation_config=build_generation_config(),
         )
+    synchronize_device()
+    elapsed_ms = round((perf_counter() - started_at) * 1000, 2)
 
     generated_ids_trimmed = [
         out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
+    input_token_count = int(inputs.input_ids.shape[-1])
+    output_token_count = sum(len(out_ids) for out_ids in generated_ids_trimmed)
     output_text = processor.batch_decode(
         generated_ids_trimmed,
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
     result = str(output_text[0]).strip()
+    log_resource_snapshot(
+        "vision_model.perf",
+        torch_module=torch,
+        model=model,
+        extra={
+            "elapsed_ms": elapsed_ms,
+            "input_tokens": input_token_count,
+            "output_tokens": output_token_count,
+            "image_count": len(images),
+            "video_count": len(videos),
+        },
+    )
     log_event("vision_model.output", payload=result)
     return result
 
