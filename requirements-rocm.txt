@@ -1,12 +1,24 @@
-numpy==1.26.4
+numpy==1.26.4 ; platform_system == "Linux"
+numpy ; platform_system == "Windows"
 
-/home/total/ai/torch-2.9.1+rocm7.2.0.lw.git7e1940d4-cp312-cp312-linux_x86_64.whl
-/home/total/ai/torchvision-0.24.0+rocm7.2.0.gitb919bd0c-cp312-cp312-linux_x86_64.whl
-/home/total/ai/triton-3.5.1+rocm7.2.0.gita272dfa8-cp312-cp312-linux_x86_64.whl
+# Linux/Ubuntu: install locally cached ROCm wheels.
+# Linux/Ubuntu: install official AMD ROCm 7.2.1 wheels via pip.
+torch @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl ; platform_system == "Linux"
+torchvision @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchvision-0.24.0%2Brocm7.2.1.gitb919bd0c-cp312-cp312-linux_x86_64.whl ; platform_system == "Linux"
+triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl ; platform_system == "Linux"
 
-transformers>=4.57.6
-accelerate>=0.34.0
-huggingface_hub>=0.25.0
+# Windows: install official AMD ROCm 7.2.1 wheels via pip.
+# ROCm on Windows currently requires Python 3.12 and the matching AMD driver.
+rocm-sdk-core @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl ; platform_system == "Windows"
+rocm-sdk-devel @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl ; platform_system == "Windows"
+rocm-sdk-libraries-custom @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl ; platform_system == "Windows"
+rocm @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz ; platform_system == "Windows"
+torch @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl ; platform_system == "Windows"
+torchvision @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl ; platform_system == "Windows"
+
+transformers>=4.57.6,<5
+accelerate>=0.34.0,<2
+huggingface_hub>=0.25.0,<1
 pillow>=10.0.0
 safetensors>=0.4.5
 qwen-vl-utils==0.0.14

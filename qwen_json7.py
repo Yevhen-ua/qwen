@@ -11,17 +11,22 @@ from typing import Any
 from PIL import Image
 
 from qwen_logging import log_event, log_retry
-from qwen_parser6 import call_parser, clean_single_line_text, extract_json, extract_requested_input_length
+from qwen_parser7 import (
+    clean_single_line_text,
+    extract_json,
+    extract_requested_input_length,
+    interpret_command,
+)
 from qwen_prompts import (
-    SYSTEM_TEXT_VISION,
-    build_drag_prompt,
-    build_exists_prompt,
-    build_point_prompt,
+    SYSTEM_TEXT_GROUND_V2,
+    build_ground_prompt_v2,
 )
 from qwen_schemas import (
     validate_drag_output as validate_drag_output_schema,
     validate_exists_output as validate_exists_output_schema,
+    validate_multi_value_output as validate_multi_value_output_schema,
     validate_point_output as validate_point_output_schema,
+    validate_value_output as validate_value_output_schema,
 )
 from raw_answer_point import draw
 
@@ -37,11 +42,18 @@ from qwen_vl_utils import process_vision_info
 MODEL_PATH = os.environ.get("QWEN_MODEL_PATH", "./models/Qwen3-VL-8B-Instruct")
 OUTPUT_DIR = Path(os.environ.get("QWEN_OUTPUT_DIR", "test_images/output"))
 
-# Image resizing control for Qwen3-VL.
 IMAGE_MIN_PIXELS = 256 * 256
 IMAGE_MAX_PIXELS = 1200 * 1200
 
-MAX_NEW_TOKENS = 120
+INTERPRET_MAX_NEW_TOKENS = 160
+GROUND_MAX_NEW_TOKENS_BY_MODE = {
+    "yes_no": 96,
+    "point": 96,
+    "input": 96,
+    "drag": 128,
+    "value": 160,
+    "multi_value": 384,
+}
 NORMALIZED_COORD_MAX = 1000
 DEFAULT_RANDOM_TEXT_LENGTH = 12
 BACKEND_ALIASES = {"auto", "cuda", "rocm"}
@@ -65,7 +77,7 @@ def resolve_dtype(backend: str) -> torch.dtype:
     return torch.float16
 
 
-def resolve_attn_implementation(backend: str) -> str:
+def resolve_attn_implementation() -> str:
     try:
         import flash_attn  # noqa: F401
 
@@ -92,7 +104,7 @@ else:
 
 DEVICE_MAP = "auto"
 DTYPE = resolve_dtype(ACTIVE_BACKEND)
-ATTN_IMPLEMENTATION = resolve_attn_implementation(ACTIVE_BACKEND)
+ATTN_IMPLEMENTATION = resolve_attn_implementation()
 
 model = AutoModelForImageTextToText.from_pretrained(
     MODEL_PATH,
@@ -115,6 +127,12 @@ log_event(
     },
 )
 
+
+def random_text(length: int) -> str:
+    alphabet = string.ascii_lowercase + string.digits
+    return "".join(random.choice(alphabet) for _ in range(length))
+
+
 def normalize_mode(mode: str) -> str:
     value = mode.strip().lower()
     aliases = {
@@ -125,15 +143,12 @@ def normalize_mode(mode: str) -> str:
         "point": "point",
         "input": "input",
         "drag": "drag",
+        "value": "value",
+        "multi_value": "multi_value",
     }
     if value not in aliases:
-        raise ValueError("mode must be one of: yes_no, y_n, point, input, drag")
+        raise ValueError("mode must be one of: yes_no, y_n, point, input, drag, value, multi_value")
     return aliases[value]
-
-
-def random_text(length: int) -> str:
-    alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choice(alphabet) for _ in range(length))
 
 
 def get_model_device() -> torch.device:
@@ -171,9 +186,16 @@ def build_image_message(image_path: str) -> dict[str, Any]:
     return image_message
 
 
-def build_generation_config() -> Any:
+def resolve_ground_max_new_tokens(mode: str) -> int:
+    try:
+        return GROUND_MAX_NEW_TOKENS_BY_MODE[mode]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported mode: {mode}") from exc
+
+
+def build_generation_config(max_new_tokens: int) -> Any:
     generation_config = deepcopy(model.generation_config)
-    generation_config.max_new_tokens = MAX_NEW_TOKENS
+    generation_config.max_new_tokens = max_new_tokens
     generation_config.use_cache = True
     generation_config.do_sample = False
     generation_config.temperature = None
@@ -220,7 +242,7 @@ def run_text_model(messages: list[dict[str, Any]]) -> str:
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
-            generation_config=build_generation_config(),
+            generation_config=build_generation_config(INTERPRET_MAX_NEW_TOKENS),
         )
 
     generated_ids_trimmed = [
@@ -236,7 +258,7 @@ def run_text_model(messages: list[dict[str, Any]]) -> str:
     return result
 
 
-def run_vision_model(image_path: str, user_text: str) -> str:
+def run_vision_model(image_path: str, user_text: str, mode: str) -> str:
     log_event(
         "vision_model.request",
         payload={
@@ -247,7 +269,7 @@ def run_vision_model(image_path: str, user_text: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": [{"type": "text", "text": SYSTEM_TEXT_VISION}],
+            "content": [{"type": "text", "text": SYSTEM_TEXT_GROUND_V2}],
         },
         {
             "role": "user",
@@ -280,7 +302,7 @@ def run_vision_model(image_path: str, user_text: str) -> str:
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
-            generation_config=build_generation_config(),
+            generation_config=build_generation_config(resolve_ground_max_new_tokens(mode)),
         )
 
     generated_ids_trimmed = [
@@ -295,10 +317,8 @@ def run_vision_model(image_path: str, user_text: str) -> str:
     log_event("vision_model.output", payload=result)
     return result
 
-
 def validate_exists_output(data: dict[str, Any]) -> dict[str, Any]:
     validated = validate_exists_output_schema(data)
-    log_event("exists.validated", payload=validated)
     return {
         "status": validated["status"],
         "comment": validated["comment"],
@@ -307,7 +327,6 @@ def validate_exists_output(data: dict[str, Any]) -> dict[str, Any]:
 
 def validate_point_output(data: dict[str, Any]) -> dict[str, Any]:
     validated = validate_point_output_schema(data, NORMALIZED_COORD_MAX)
-    log_event("point.validated", payload=validated)
     return {
         "status": validated["status"],
         "x": validated["x"],
@@ -316,9 +335,26 @@ def validate_point_output(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_value_output(data: dict[str, Any]) -> dict[str, Any]:
+    validated = validate_value_output_schema(data)
+    return {
+        "status": validated["status"],
+        "answer": validated["answer"],
+        "comment": validated["comment"],
+    }
+
+
+def validate_multi_value_output(data: dict[str, Any]) -> dict[str, Any]:
+    validated = validate_multi_value_output_schema(data)
+    return {
+        "status": validated["status"],
+        "answer": validated["answer"],
+        "comment": validated["comment"],
+    }
+
+
 def validate_drag_output(data: dict[str, Any]) -> dict[str, Any]:
     validated = validate_drag_output_schema(data, NORMALIZED_COORD_MAX)
-    log_event("drag.validated", payload=validated)
     return {
         "status": validated["status"],
         "x": validated["x"],
@@ -328,133 +364,57 @@ def validate_drag_output(data: dict[str, Any]) -> dict[str, Any]:
         "comment": validated["comment"],
     }
 
-
-def call_exists(image_path: str, target_description: str, max_retries: int = 3) -> dict[str, Any]:
+def ground_action(image_path: str, mode: str, task_spec: dict[str, Any], max_retries: int = 2) -> dict[str, Any]:
     last_error: Exception | None = None
     last_raw_text: str | None = None
     retry_feedback = ""
 
-    for _attempt in range(1, max_retries + 1):
-        prompt = build_exists_prompt(target_description)
+    for attempt in range(1, max_retries + 1):
+        prompt = build_ground_prompt_v2(mode, task_spec, NORMALIZED_COORD_MAX)
         if retry_feedback:
             prompt += (
                 "\n\nPrevious output was invalid.\n"
                 f"Validation error: {retry_feedback}\n"
                 "Return valid JSON only."
             )
+
         log_event(
-            "exists.request",
-            f"attempt {_attempt}/{max_retries}",
+            "ground.request",
+            f"attempt {attempt}/{max_retries}",
             {
                 "image_path": image_path,
-                "target_description": target_description,
+                "task_spec": task_spec,
                 "prompt": prompt,
             },
         )
+
         try:
-            raw_text = run_vision_model(image_path, prompt)
+            raw_text = run_vision_model(image_path, prompt, mode)
             last_raw_text = raw_text
+            log_event("ground.raw_output", payload=raw_text)
             data = extract_json(raw_text)
-            log_event("exists.json", payload=data)
-            validated = validate_exists_output(data)
-            log_event("exists.result", payload=validated)
+            # log_event("ground.json", payload=data)
+            if mode == "yes_no":
+                validated = validate_exists_output(data)
+            elif mode in {"point", "input"}:
+                validated = validate_point_output(data)
+            elif mode == "value":
+                validated = validate_value_output(data)
+            elif mode == "multi_value":
+                validated = validate_multi_value_output(data)
+            elif mode == "drag":
+                validated = validate_drag_output(data)
+            else:
+                raise ValueError(f"Unsupported mode: {mode}")
+            log_event("ground.result", payload=validated)
             return validated
         except Exception as exc:
             last_error = exc
             retry_feedback = str(exc)
-            log_retry("exists", _attempt, max_retries, exc, last_raw_text)
+            log_retry("ground", attempt, max_retries, exc, last_raw_text)
 
     raise RuntimeError(
-        f"Exists check failed after {max_retries} attempts. "
-        f"Last error: {last_error}. "
-        f"Last raw output: {last_raw_text!r}"
-    )
-
-
-def call_point(image_path: str, target_description: str, max_retries: int = 3) -> dict[str, Any]:
-    last_error: Exception | None = None
-    last_raw_text: str | None = None
-    retry_feedback = ""
-
-    for _attempt in range(1, max_retries + 1):
-        prompt = build_point_prompt(target_description, NORMALIZED_COORD_MAX)
-        if retry_feedback:
-            prompt += (
-                "\n\nPrevious output was invalid.\n"
-                f"Validation error: {retry_feedback}\n"
-                "Return valid JSON only."
-            )
-        log_event(
-            "point.request",
-            f"attempt {_attempt}/{max_retries}",
-            {
-                "image_path": image_path,
-                "target_description": target_description,
-                "prompt": prompt,
-            },
-        )
-        try:
-            raw_text = run_vision_model(image_path, prompt)
-            last_raw_text = raw_text
-            data = extract_json(raw_text)
-            log_event("point.json", payload=data)
-            validated = validate_point_output(data)
-            log_event("point.result", payload=validated)
-            return validated
-        except Exception as exc:
-            last_error = exc
-            retry_feedback = str(exc)
-            log_retry("point", _attempt, max_retries, exc, last_raw_text)
-
-    raise RuntimeError(
-        f"Point localization failed after {max_retries} attempts. "
-        f"Last error: {last_error}. "
-        f"Last raw output: {last_raw_text!r}"
-    )
-
-
-def call_drag(image_path: str, source_description: str, destination_description: str, max_retries: int = 3) -> dict[str, Any]:
-    last_error: Exception | None = None
-    last_raw_text: str | None = None
-    retry_feedback = ""
-
-    for _attempt in range(1, max_retries + 1):
-        prompt = build_drag_prompt(
-            source_description,
-            destination_description,
-            NORMALIZED_COORD_MAX,
-        )
-        if retry_feedback:
-            prompt += (
-                "\n\nPrevious output was invalid.\n"
-                f"Validation error: {retry_feedback}\n"
-                "Return valid JSON only."
-            )
-        log_event(
-            "drag.request",
-            f"attempt {_attempt}/{max_retries}",
-            {
-                "image_path": image_path,
-                "source_description": source_description,
-                "destination_description": destination_description,
-                "prompt": prompt,
-            },
-        )
-        try:
-            raw_text = run_vision_model(image_path, prompt)
-            last_raw_text = raw_text
-            data = extract_json(raw_text)
-            log_event("drag.json", payload=data)
-            validated = validate_drag_output(data)
-            log_event("drag.result", payload=validated)
-            return validated
-        except Exception as exc:
-            last_error = exc
-            retry_feedback = str(exc)
-            log_retry("drag", _attempt, max_retries, exc, last_raw_text)
-
-    raise RuntimeError(
-        f"Drag localization failed after {max_retries} attempts. "
+        f"Grounding failed after {max_retries} attempts. "
         f"Last error: {last_error}. "
         f"Last raw output: {last_raw_text!r}"
     )
@@ -477,22 +437,6 @@ def normalized_drag_to_pixels(x: int, y: int, x2: int, y2: int, image_path: str)
     }
 
 
-def yes_no_result(answer: bool, comment: str) -> dict[str, Any]:
-    return {
-        "mode": "yes_no",
-        "answer": answer,
-        "comment": comment,
-    }
-
-
-def point_result(mode: str, answer: dict[str, Any], comment: str) -> dict[str, Any]:
-    return {
-        "mode": mode,
-        "answer": answer,
-        "comment": comment,
-    }
-
-
 def null_xy() -> dict[str, None]:
     return {"x": None, "y": None}
 
@@ -501,9 +445,18 @@ def null_drag() -> dict[str, None]:
     return {"x": None, "y": None, "x2": None, "y2": None}
 
 
-def resolve_input_text(parsed: dict[str, Any], fallback_question: str) -> str:
-    if parsed["generate_random_text"]:
-        length = parsed["random_length"]
+def action_result(mode: str, status: str, answer: Any, comment: str) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "status": status,
+        "answer": answer,
+        "comment": comment,
+    }
+
+
+def resolve_input_text(task_spec: dict[str, Any], fallback_question: str) -> str:
+    if task_spec["generate_random_text"]:
+        length = task_spec["random_length"]
         if length is None:
             length = extract_requested_input_length(fallback_question) or DEFAULT_RANDOM_TEXT_LENGTH
         generated = random_text(length)
@@ -512,17 +465,12 @@ def resolve_input_text(parsed: dict[str, Any], fallback_question: str) -> str:
             payload={"length": length, "text": generated},
         )
         return generated
-    resolved = clean_single_line_text(parsed["input_text"])
+    resolved = clean_single_line_text(task_spec["input_text"])
     log_event("input.literal_text", payload=resolved)
     return resolved
 
 
-def ask_image_json(
-    image_path: str,
-    question: str,
-    mode: str,
-    max_retries: int = 3,
-) -> dict[str, Any]:
+def ask_image_json(image_path: str, question: str, mode: str, max_retries: int = 2) -> dict[str, Any]:
     image_path = str(Path(image_path).expanduser().resolve())
     mode = normalize_mode(mode)
     log_event(
@@ -535,128 +483,80 @@ def ask_image_json(
         },
     )
 
-    parsed = call_parser(question, mode, run_text_model, max_retries=max_retries)
-    log_event("ask.parsed", payload=parsed)
+    task_spec = interpret_command(question, mode, run_text_model, max_retries=max_retries)
+    log_event("ask.interpreted", payload=task_spec)
+
+    if task_spec["status"] != "ok":
+        if mode == "value":
+            result = action_result(mode, "ambiguous", "", task_spec["comment"])
+        elif mode == "multi_value":
+            result = action_result(mode, "ambiguous", [], task_spec["comment"])
+        else:
+            result = action_result(mode, "ambiguous", None, task_spec["comment"])
+        log_event("ask.result", payload=result)
+        return result
+
+    grounded = ground_action(image_path, mode, task_spec, max_retries=max_retries)
 
     if mode == "yes_no":
-        if parsed["status"] != "ok" or not parsed["target_description"]:
-            result = yes_no_result(False, parsed["comment"] or "ambiguous command")
-            log_event("ask.result", payload=result)
-            return result
-
-        exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
-        result = yes_no_result(exists["status"] == "found", exists["comment"])
+        answer = grounded["status"] == "found"
+        if grounded["status"] == "ambiguous":
+            answer = None
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
         log_event("ask.result", payload=result)
         return result
 
     if mode == "point":
-        if parsed["status"] != "ok" or not parsed["target_description"]:
-            result = point_result("point", null_xy(), parsed["comment"] or "ambiguous command")
-            log_event("ask.result", payload=result)
-            return result
-
-        exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
-        if exists["status"] != "found":
-            result = point_result("point", null_xy(), exists["comment"])
-            log_event("ask.result", payload=result)
-            return result
-
-        point = call_point(image_path, parsed["target_description"], max_retries=max_retries)
-        if point["status"] != "found" or point["x"] is None or point["y"] is None:
-            result = point_result("point", null_xy(), point["comment"])
-            log_event("ask.result", payload=result)
-            return result
-
-        result = point_result(
-            "point",
-            normalized_to_pixels(point["x"], point["y"], image_path),
-            point["comment"],
-        )
+        answer = null_xy()
+        if grounded["status"] == "found" and grounded["x"] is not None and grounded["y"] is not None:
+            answer = normalized_to_pixels(grounded["x"], grounded["y"], image_path)
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
         log_event("ask.result", payload=result)
         return result
 
     if mode == "input":
-        if parsed["status"] != "ok" or not parsed["target_description"]:
-            result = point_result("input", null_xy(), parsed["comment"] or "ambiguous command")
-            log_event("ask.result", payload=result)
-            return result
-
-        exists = call_exists(image_path, parsed["target_description"], max_retries=max_retries)
-        if exists["status"] != "found":
-            result = point_result("input", null_xy(), exists["comment"])
-            log_event("ask.result", payload=result)
-            return result
-
-        point = call_point(image_path, parsed["target_description"], max_retries=max_retries)
-        if point["status"] != "found" or point["x"] is None or point["y"] is None:
-            result = point_result("input", null_xy(), point["comment"])
-            log_event("ask.result", payload=result)
-            return result
-
-        input_text = resolve_input_text(parsed, question)
-        result = point_result(
-            "input",
-            normalized_to_pixels(point["x"], point["y"], image_path),
-            input_text,
-        )
+        text_to_type = resolve_input_text(task_spec, question)
+        answer: dict[str, Any] = {"x": None, "y": None, "text": text_to_type}
+        if grounded["status"] == "found" and grounded["x"] is not None and grounded["y"] is not None:
+            answer.update(normalized_to_pixels(grounded["x"], grounded["y"], image_path))
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
         log_event("ask.result", payload=result)
         return result
 
     if mode == "drag":
-        if (
-            parsed["status"] != "ok"
-            or not parsed["source_description"]
-            or not parsed["destination_description"]
-        ):
-            result = point_result("drag", null_drag(), parsed["comment"] or "ambiguous command")
-            log_event("ask.result", payload=result)
-            return result
-
-        source_exists = call_exists(image_path, parsed["source_description"], max_retries=max_retries)
-        if source_exists["status"] != "found":
-            result = point_result("drag", null_drag(), f"source {source_exists['comment']}")
-            log_event("ask.result", payload=result)
-            return result
-
-        destination_exists = call_exists(image_path, parsed["destination_description"], max_retries=max_retries)
-        if destination_exists["status"] != "found":
-            result = point_result("drag", null_drag(), f"destination {destination_exists['comment']}")
-            log_event("ask.result", payload=result)
-            return result
-
-        drag = call_drag(
-            image_path,
-            parsed["source_description"],
-            parsed["destination_description"],
-            max_retries=max_retries,
-        )
-        if drag["status"] != "found":
-            result = point_result("drag", null_drag(), drag["comment"])
-            log_event("ask.result", payload=result)
-            return result
-
-        result = point_result(
-            "drag",
-            normalized_drag_to_pixels(
-                drag["x"],
-                drag["y"],
-                drag["x2"],
-                drag["y2"],
+        answer = null_drag()
+        if grounded["status"] == "found":
+            answer = normalized_drag_to_pixels(
+                grounded["x"],
+                grounded["y"],
+                grounded["x2"],
+                grounded["y2"],
                 image_path,
-            ),
-            drag["comment"],
-        )
+            )
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
         log_event("ask.result", payload=result)
         return result
 
-    raise ValueError("Unsupported mode")
+    if mode == "value":
+        answer = grounded["answer"] if grounded["status"] == "found" else ""
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
+        log_event("ask.result", payload=result)
+        return result
+
+    if mode == "multi_value":
+        answer = grounded["answer"] if grounded["status"] == "found" else []
+        result = action_result(mode, grounded["status"], answer, grounded["comment"])
+        log_event("ask.result", payload=result)
+        return result
+
+    raise ValueError(f"Unsupported mode: {mode}")
 
 
 if __name__ == "__main__":
     img = "test_images/input/rozetka_50.png"
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = get_output_dir()
-    results_path = output_dir / f"qwen_results_{run_timestamp}.jsonl"
+    results_path = output_dir / f"qwen7_results_{run_timestamp}.jsonl"
 
     examples = [
         ("yes_no", 'Logo with smiley face should be in top left corner of image'),
@@ -672,11 +572,11 @@ if __name__ == "__main__":
         ("point", "Return the center point of the Upload button",),
         ("input", 'input some random text with length of 12 symbols in input box below Brand label'),
         ("drag", 'Drag the left handle of the price slider to the middle of the slider track'),
-        ("drag", 'Drag the left handle of the "price" slider to the middle of the slider track')
+        ("value", "how many items shown in shopping cart in top right corner?"),
+        ("multi_value", "What items displayed in Popular brands list?"),
     ]
 
-    i = 0
-    for mode_name, question_text in examples:
+    for i, (mode_name, question_text) in enumerate(examples, start=1):
         result = ask_image_json(img, question_text, mode_name)
         append_result_record(
             results_path,
@@ -689,7 +589,6 @@ if __name__ == "__main__":
             },
         )
         print(json.dumps(result, ensure_ascii=False))
-        i += 1
-        if result["mode"] in ("input", "point", "drag"):
-            draw(result["answer"], img, output_dir / f"qwen_{run_timestamp}_q{i}.png")
+        if result["mode"] in {"point", "input", "drag"}:
+            draw(result["answer"], img, output_dir / f"qwen7_{run_timestamp}_q{i}.png")
     print(json.dumps({"results_file": str(results_path)}, ensure_ascii=False))

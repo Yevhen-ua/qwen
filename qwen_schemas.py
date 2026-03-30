@@ -19,6 +19,71 @@ EXISTS_OUTPUT_VALIDATOR = Draft202012Validator(
 )
 
 
+VALUE_OUTPUT_VALIDATOR = Draft202012Validator(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "answer", "comment"],
+        "properties": {
+            "status": {"enum": ["found", "not_found", "ambiguous"]},
+            "answer": {"type": "string"},
+            "comment": {"type": "string"},
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"status": {"const": "found"}}},
+                "then": {
+                    "properties": {
+                        "answer": {"type": "string", "minLength": 1},
+                    }
+                },
+                "else": {
+                    "properties": {
+                        "answer": {"const": ""},
+                    }
+                },
+            }
+        ],
+    }
+)
+
+
+MULTI_VALUE_OUTPUT_VALIDATOR = Draft202012Validator(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "answer", "comment"],
+        "properties": {
+            "status": {"enum": ["found", "not_found", "ambiguous"]},
+            "answer": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "comment": {"type": "string"},
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"status": {"const": "found"}}},
+                "then": {
+                    "properties": {
+                        "answer": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                        }
+                    }
+                },
+                "else": {
+                    "properties": {
+                        "answer": {"type": "array", "maxItems": 0},
+                    }
+                },
+            }
+        ],
+    }
+)
+
+
 def _coord_schema(coord_max: int) -> dict[str, Any]:
     return {
         "anyOf": [
@@ -151,6 +216,14 @@ def _validate_with_schema(
 
 def validate_exists_output(data: dict[str, Any]) -> dict[str, Any]:
     return _validate_with_schema(EXISTS_OUTPUT_VALIDATOR, data, "invalid exists output")
+
+
+def validate_value_output(data: dict[str, Any]) -> dict[str, Any]:
+    return _validate_with_schema(VALUE_OUTPUT_VALIDATOR, data, "invalid value output")
+
+
+def validate_multi_value_output(data: dict[str, Any]) -> dict[str, Any]:
+    return _validate_with_schema(MULTI_VALUE_OUTPUT_VALIDATOR, data, "invalid multi_value output")
 
 
 def validate_point_output(data: dict[str, Any], coord_max: int) -> dict[str, Any]:
