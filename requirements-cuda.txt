@@ -1,4 +1,4 @@
-numpy==1.26.4
+numpy>=1.26,<3
 
 # Install the NVIDIA/CUDA PyTorch build separately for your CUDA version.
 # Example:
