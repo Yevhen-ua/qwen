@@ -82,29 +82,40 @@ llm_kwargs: dict[str, Any] = {
 if VLLM_MM_ENCODER_TP_MODE:
     llm_kwargs["mm_encoder_tp_mode"] = VLLM_MM_ENCODER_TP_MODE
 
-llm = LLM(**llm_kwargs)
+_llm: LLM | None = None
+_runtime_logged = False
 
-log_event(
-    "runtime.config",
-    payload={
-        "model_path": MODEL_PATH,
-        "tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
-        "dtype": VLLM_DTYPE,
-        "gpu_memory_utilization": VLLM_GPU_MEMORY_UTILIZATION,
-        "cpu_offload_gb": VLLM_CPU_OFFLOAD_GB,
-        "max_model_len": VLLM_MAX_MODEL_LEN,
-        "max_num_seqs": VLLM_MAX_NUM_SEQS,
-        "limit_mm_per_prompt": {
-            "image": VLLM_LIMIT_MM_IMAGES,
-            "video": VLLM_LIMIT_MM_VIDEOS,
-        },
-        "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
-        "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
-        "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
-        "auto_defaults": VLLM_AUTO_DEFAULTS or None,
-    },
-)
-log_resource_snapshot("runtime.resources", torch_module=torch)
+
+def get_llm() -> LLM:
+    global _llm, _runtime_logged
+    if _llm is None:
+        _llm = LLM(**llm_kwargs)
+
+    if not _runtime_logged:
+        log_event(
+            "runtime.config",
+            payload={
+                "model_path": MODEL_PATH,
+                "tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
+                "dtype": VLLM_DTYPE,
+                "gpu_memory_utilization": VLLM_GPU_MEMORY_UTILIZATION,
+                "cpu_offload_gb": VLLM_CPU_OFFLOAD_GB,
+                "max_model_len": VLLM_MAX_MODEL_LEN,
+                "max_num_seqs": VLLM_MAX_NUM_SEQS,
+                "limit_mm_per_prompt": {
+                    "image": VLLM_LIMIT_MM_IMAGES,
+                    "video": VLLM_LIMIT_MM_VIDEOS,
+                },
+                "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
+                "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
+                "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
+                "auto_defaults": VLLM_AUTO_DEFAULTS or None,
+            },
+        )
+        log_resource_snapshot("runtime.resources", torch_module=torch)
+        _runtime_logged = True
+
+    return _llm
 
 
 def random_text(length: int) -> str:
@@ -186,6 +197,7 @@ def request_output_token_count(request_output: Any) -> int | None:
 
 
 def run_text_model(messages: list[dict[str, Any]]) -> str:
+    llm = get_llm()
     log_event("text_model.messages", payload=messages)
     chat_messages = [
         {
@@ -219,6 +231,7 @@ def run_text_model(messages: list[dict[str, Any]]) -> str:
 
 
 def run_vision_model(image_path: str, user_text: str, mode: str) -> str:
+    llm = get_llm()
     resolved_image_path = Path(image_path).expanduser().resolve()
     log_event(
         "vision_model.request",
@@ -503,6 +516,9 @@ def ask_image_json(image_path: str, question: str, mode: str, max_retries: int =
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     img = "test_images/input/rozetka_50.png"
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = get_output_dir()
