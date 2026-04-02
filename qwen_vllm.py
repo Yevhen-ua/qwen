@@ -54,8 +54,8 @@ def resolve_tensor_parallel_size() -> int:
 
 VLLM_TENSOR_PARALLEL_SIZE = resolve_tensor_parallel_size()
 VLLM_AUTO_DEFAULTS = VLLM_ENV_INFO["auto_defaults"]
+VLLM_DTYPE = os.environ.get("QWEN_VLLM_DTYPE", "auto").strip() or "auto"
 VLLM_GPU_MEMORY_UTILIZATION = float(os.environ.get("QWEN_VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
-VLLM_SWAP_SPACE_GB = float(os.environ.get("QWEN_VLLM_SWAP_SPACE_GB", "4"))
 VLLM_CPU_OFFLOAD_GB = float(os.environ.get("QWEN_VLLM_CPU_OFFLOAD_GB", "0"))
 VLLM_MAX_MODEL_LEN = int(os.environ.get("QWEN_VLLM_MAX_MODEL_LEN", "8192"))
 VLLM_MAX_NUM_SEQS = int(os.environ.get("QWEN_VLLM_MAX_NUM_SEQS", "1"))
@@ -68,8 +68,8 @@ llm_kwargs: dict[str, Any] = {
     "model": MODEL_PATH,
     "trust_remote_code": True,
     "tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
+    "dtype": VLLM_DTYPE,
     "gpu_memory_utilization": VLLM_GPU_MEMORY_UTILIZATION,
-    "swap_space": VLLM_SWAP_SPACE_GB,
     "cpu_offload_gb": VLLM_CPU_OFFLOAD_GB,
     "max_model_len": VLLM_MAX_MODEL_LEN,
     "max_num_seqs": VLLM_MAX_NUM_SEQS,
@@ -89,8 +89,8 @@ log_event(
     payload={
         "model_path": MODEL_PATH,
         "tensor_parallel_size": VLLM_TENSOR_PARALLEL_SIZE,
+        "dtype": VLLM_DTYPE,
         "gpu_memory_utilization": VLLM_GPU_MEMORY_UTILIZATION,
-        "swap_space_gb": VLLM_SWAP_SPACE_GB,
         "cpu_offload_gb": VLLM_CPU_OFFLOAD_GB,
         "max_model_len": VLLM_MAX_MODEL_LEN,
         "max_num_seqs": VLLM_MAX_NUM_SEQS,

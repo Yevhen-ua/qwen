@@ -1,9 +1,70 @@
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 
 def parse_visible_devices(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def get_model_path() -> Path:
+    configured_path = os.environ.get("QWEN_MODEL_PATH", "./models/Qwen3-VL-8B-Instruct")
+    return Path(configured_path).expanduser()
+
+
+def load_model_parallel_constraints() -> dict[str, Any]:
+    config_path = get_model_path() / "config.json"
+    if not config_path.exists():
+        return {}
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = json.load(handle)
+
+    text_config = config.get("text_config", {})
+    vision_config = config.get("vision_config", {})
+
+    constraints: dict[str, Any] = {
+        "config_path": str(config_path),
+    }
+
+    attention_heads = text_config.get("num_attention_heads")
+    if isinstance(attention_heads, int) and attention_heads > 0:
+        constraints["num_attention_heads"] = attention_heads
+
+    key_value_heads = text_config.get("num_key_value_heads")
+    if isinstance(key_value_heads, int) and key_value_heads > 0:
+        constraints["num_key_value_heads"] = key_value_heads
+
+    vision_heads = vision_config.get("num_heads")
+    if isinstance(vision_heads, int) and vision_heads > 0:
+        constraints["vision_num_heads"] = vision_heads
+
+    return constraints
+
+
+def tensor_parallel_is_compatible(tp_size: int, constraints: dict[str, Any]) -> bool:
+    if tp_size < 1:
+        return False
+
+    for key in ("num_attention_heads", "num_key_value_heads"):
+        value = constraints.get(key)
+        if isinstance(value, int) and value % tp_size != 0:
+            return False
+    return True
+
+
+def resolve_compatible_tensor_parallel_size(
+    requested_tp_size: int,
+    constraints: dict[str, Any],
+) -> int:
+    if tensor_parallel_is_compatible(requested_tp_size, constraints):
+        return requested_tp_size
+
+    for candidate in range(requested_tp_size - 1, 0, -1):
+        if tensor_parallel_is_compatible(candidate, constraints):
+            return candidate
+    return 1
 
 
 def detect_system_memory_gb() -> float | None:
@@ -46,6 +107,16 @@ def choose_resource_bucket(min_gpu_memory_gb: float) -> str:
     return "large"
 
 
+def resolve_dtype_for_devices(compute_capabilities: list[tuple[int, int]]) -> str:
+    if not compute_capabilities:
+        return "auto"
+
+    min_major = min(capability[0] for capability in compute_capabilities)
+    if min_major >= 8:
+        return "bfloat16"
+    return "float16"
+
+
 def clamp_host_budget(target_gb: float, system_memory_gb: float | None, visible_gpu_count: int) -> float:
     if system_memory_gb is None:
         return round(target_gb, 2)
@@ -84,7 +155,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.8,
                 "max_model_len": 1536,
                 "max_num_seqs": 1,
-                "swap_space_gb": 12.0,
                 "cpu_offload_gb": 10.0,
                 "mm_processor_cache_gb": 0.0,
             },
@@ -92,7 +162,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.84,
                 "max_model_len": 2048,
                 "max_num_seqs": 1,
-                "swap_space_gb": 16.0,
                 "cpu_offload_gb": 8.0,
                 "mm_processor_cache_gb": 0.0,
             },
@@ -100,7 +169,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.88,
                 "max_model_len": 3072,
                 "max_num_seqs": 1,
-                "swap_space_gb": 20.0,
                 "cpu_offload_gb": 6.0,
                 "mm_processor_cache_gb": 1.0,
             },
@@ -110,7 +178,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.84,
                 "max_model_len": 4096,
                 "max_num_seqs": 1,
-                "swap_space_gb": 12.0,
                 "cpu_offload_gb": 6.0,
                 "mm_processor_cache_gb": 1.0,
             },
@@ -118,7 +185,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.88,
                 "max_model_len": 6144,
                 "max_num_seqs": 1,
-                "swap_space_gb": 8.0,
                 "cpu_offload_gb": 4.0,
                 "mm_processor_cache_gb": 2.0,
             },
@@ -126,7 +192,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.92,
                 "max_model_len": 8192,
                 "max_num_seqs": 2,
-                "swap_space_gb": 6.0,
                 "cpu_offload_gb": 2.0,
                 "mm_processor_cache_gb": 3.0,
             },
@@ -136,7 +201,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.88,
                 "max_model_len": 8192,
                 "max_num_seqs": 1,
-                "swap_space_gb": 6.0,
                 "cpu_offload_gb": 2.0,
                 "mm_processor_cache_gb": 2.0,
             },
@@ -144,7 +208,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.92,
                 "max_model_len": 12288,
                 "max_num_seqs": 2,
-                "swap_space_gb": 4.0,
                 "cpu_offload_gb": 0.0,
                 "mm_processor_cache_gb": 4.0,
             },
@@ -152,7 +215,6 @@ def build_auto_defaults(
                 "gpu_memory_utilization": 0.95,
                 "max_model_len": 16384,
                 "max_num_seqs": 4,
-                "swap_space_gb": 2.0,
                 "cpu_offload_gb": 0.0,
                 "mm_processor_cache_gb": 6.0,
             },
@@ -161,9 +223,6 @@ def build_auto_defaults(
 
     bucket = choose_resource_bucket(min_gpu_memory_gb)
     settings = dict(profile_matrix[bucket][profile])
-    settings["swap_space_gb"] = clamp_host_budget(
-        float(settings["swap_space_gb"]), system_memory_gb, visible_gpu_count
-    )
     settings["cpu_offload_gb"] = clamp_host_budget(
         float(settings["cpu_offload_gb"]), system_memory_gb, visible_gpu_count
     )
@@ -186,6 +245,7 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
     visible_device_count = len(parse_visible_devices(visible_devices)) if visible_devices else None
 
     configured_tp = os.environ.get("QWEN_VLLM_TENSOR_PARALLEL_SIZE", "").strip()
+    model_parallel_constraints = load_model_parallel_constraints()
     if configured_tp:
         tensor_parallel_size = int(configured_tp)
         if tensor_parallel_size < 1:
@@ -194,8 +254,15 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
             raise ValueError(
                 "QWEN_VLLM_TENSOR_PARALLEL_SIZE cannot exceed the number of visible CUDA devices"
             )
+        if not tensor_parallel_is_compatible(tensor_parallel_size, model_parallel_constraints):
+            raise ValueError(
+                "QWEN_VLLM_TENSOR_PARALLEL_SIZE is incompatible with the model attention head layout"
+            )
     elif visible_device_count is not None and visible_device_count > 0:
-        tensor_parallel_size = visible_device_count
+        tensor_parallel_size = resolve_compatible_tensor_parallel_size(
+            visible_device_count,
+            model_parallel_constraints,
+        )
         os.environ["QWEN_VLLM_TENSOR_PARALLEL_SIZE"] = str(tensor_parallel_size)
     else:
         tensor_parallel_size = None
@@ -204,13 +271,22 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
 
     if tensor_parallel_size is None:
         visible_gpu_count = torch.cuda.device_count()
-        tensor_parallel_size = visible_gpu_count if visible_gpu_count > 0 else 1
+        requested_tp_size = visible_gpu_count if visible_gpu_count > 0 else 1
+        tensor_parallel_size = resolve_compatible_tensor_parallel_size(
+            requested_tp_size,
+            model_parallel_constraints,
+        )
         os.environ["QWEN_VLLM_TENSOR_PARALLEL_SIZE"] = str(tensor_parallel_size)
 
     gpu_memories_gb: list[float] = []
+    gpu_compute_capabilities: list[tuple[int, int]] = []
     if torch.cuda.device_count() > 0:
         gpu_memories_gb = [
             round(torch.cuda.get_device_properties(index).total_memory / (1024**3), 2)
+            for index in range(torch.cuda.device_count())
+        ]
+        gpu_compute_capabilities = [
+            torch.cuda.get_device_capability(index)
             for index in range(torch.cuda.device_count())
         ]
 
@@ -226,16 +302,16 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
         )
 
         set_default_env(
+            "QWEN_VLLM_DTYPE",
+            resolve_dtype_for_devices(gpu_compute_capabilities),
+            auto_defaults,
+            "dtype",
+        )
+        set_default_env(
             "QWEN_VLLM_GPU_MEMORY_UTILIZATION",
             float(recommended["gpu_memory_utilization"]),
             auto_defaults,
             "gpu_memory_utilization",
-        )
-        set_default_env(
-            "QWEN_VLLM_SWAP_SPACE_GB",
-            float(recommended["swap_space_gb"]),
-            auto_defaults,
-            "swap_space_gb",
         )
         set_default_env(
             "QWEN_VLLM_CPU_OFFLOAD_GB",
@@ -265,9 +341,12 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
         auto_defaults["profile"] = profile
         auto_defaults["visible_gpu_count"] = torch.cuda.device_count()
         auto_defaults["gpu_memories_gb"] = gpu_memories_gb
+        auto_defaults["gpu_compute_capabilities"] = gpu_compute_capabilities
         auto_defaults["min_gpu_memory_gb"] = min_gpu_memory_gb
         auto_defaults["system_memory_gb"] = system_memory_gb
         auto_defaults["resource_bucket"] = choose_resource_bucket(min_gpu_memory_gb)
+        auto_defaults["model_parallel_constraints"] = model_parallel_constraints or None
+        auto_defaults["resolved_tensor_parallel_size"] = tensor_parallel_size
 
     return {
         "tensor_parallel_size": tensor_parallel_size,
