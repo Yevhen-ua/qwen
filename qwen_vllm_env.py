@@ -234,6 +234,10 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
     if profile not in {"safe", "balanced", "aggressive"}:
         raise ValueError("QWEN_VLLM_PROFILE must be one of: safe, balanced, aggressive")
 
+    configured_attention_backend = os.environ.get("QWEN_VLLM_ATTENTION_BACKEND", "").strip()
+    if configured_attention_backend:
+        os.environ["VLLM_ATTENTION_BACKEND"] = configured_attention_backend
+
     configured_devices = os.environ.get("QWEN_VLLM_CUDA_DEVICES", "").strip()
     if configured_devices:
         devices = parse_visible_devices(configured_devices)
@@ -352,4 +356,5 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
         "tensor_parallel_size": tensor_parallel_size,
         "auto_defaults": auto_defaults or None,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "vllm_attention_backend": os.environ.get("VLLM_ATTENTION_BACKEND"),
     }

@@ -109,6 +109,7 @@ def get_llm() -> LLM:
                 "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
                 "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
                 "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
+                "vllm_attention_backend": VLLM_ENV_INFO["vllm_attention_backend"],
                 "auto_defaults": VLLM_AUTO_DEFAULTS or None,
             },
         )
