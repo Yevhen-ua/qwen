@@ -8,6 +8,11 @@ from time import perf_counter
 from typing import Any
 
 from PIL import Image
+from qwen_vllm_env import bootstrap_vllm_environment
+
+VLLM_ENV_INFO = bootstrap_vllm_environment()
+
+import torch
 from vllm import LLM, SamplingParams
 
 from qwen_logging import log_event, log_resource_snapshot, log_retry
@@ -42,7 +47,13 @@ GROUND_MAX_NEW_TOKENS_BY_MODE = {
 NORMALIZED_COORD_MAX = 1000
 DEFAULT_RANDOM_TEXT_LENGTH = 12
 
-VLLM_TENSOR_PARALLEL_SIZE = int(os.environ.get("QWEN_VLLM_TENSOR_PARALLEL_SIZE", "1"))
+
+def resolve_tensor_parallel_size() -> int:
+    return int(VLLM_ENV_INFO["tensor_parallel_size"])
+
+
+VLLM_TENSOR_PARALLEL_SIZE = resolve_tensor_parallel_size()
+VLLM_AUTO_DEFAULTS = VLLM_ENV_INFO["auto_defaults"]
 VLLM_GPU_MEMORY_UTILIZATION = float(os.environ.get("QWEN_VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
 VLLM_SWAP_SPACE_GB = float(os.environ.get("QWEN_VLLM_SWAP_SPACE_GB", "4"))
 VLLM_CPU_OFFLOAD_GB = float(os.environ.get("QWEN_VLLM_CPU_OFFLOAD_GB", "0"))
@@ -73,8 +84,6 @@ if VLLM_MM_ENCODER_TP_MODE:
 
 llm = LLM(**llm_kwargs)
 
-import torch
-
 log_event(
     "runtime.config",
     payload={
@@ -91,7 +100,8 @@ log_event(
         },
         "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
         "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
-        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
+        "auto_defaults": VLLM_AUTO_DEFAULTS or None,
     },
 )
 log_resource_snapshot("runtime.resources", torch_module=torch)
