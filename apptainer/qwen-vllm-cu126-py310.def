@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 
 %post
     set -eux
@@ -8,6 +8,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
     apt-get update
     apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         git \
         libgl1 \
@@ -15,8 +16,10 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
         libsm6 \
         libxext6 \
         libxrender1 \
+        ninja-build \
         python-is-python3 \
         python3 \
+        python3-dev \
         python3-pip \
         python3-venv
     rm -rf /var/lib/apt/lists/*
@@ -28,8 +31,12 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
 %environment
     export PYTHONUNBUFFERED=1
+    export CUDA_HOME=/usr/local/cuda
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    export CC=/usr/bin/gcc
+    export CXX=/usr/bin/g++
     export HF_HOME=${HF_HOME:-/hf-cache}
-    export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-/hf-cache}
 
 %runscript
     if [ "$#" -eq 0 ]; then
@@ -41,4 +48,5 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 %test
     set -eux
     /usr/bin/python3 --version
+    gcc --version
     /usr/bin/python3 -c "import vllm; print(vllm.__version__)"

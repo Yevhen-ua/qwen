@@ -143,6 +143,19 @@ def set_default_env(
     auto_defaults[auto_key] = value
 
 
+def set_default_str_env(
+    env_name: str,
+    value: str,
+    auto_defaults: dict[str, Any],
+    auto_key: str,
+) -> None:
+    if os.environ.get(env_name, "").strip():
+        return
+
+    os.environ[env_name] = value
+    auto_defaults[auto_key] = value
+
+
 def build_auto_defaults(
     min_gpu_memory_gb: float,
     visible_gpu_count: int,
@@ -233,10 +246,6 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
     profile = os.environ.get("QWEN_VLLM_PROFILE", "balanced").strip().lower() or "balanced"
     if profile not in {"safe", "balanced", "aggressive"}:
         raise ValueError("QWEN_VLLM_PROFILE must be one of: safe, balanced, aggressive")
-
-    configured_attention_backend = os.environ.get("QWEN_VLLM_ATTENTION_BACKEND", "").strip()
-    if configured_attention_backend:
-        os.environ["VLLM_ATTENTION_BACKEND"] = configured_attention_backend
 
     configured_devices = os.environ.get("QWEN_VLLM_CUDA_DEVICES", "").strip()
     if configured_devices:
@@ -341,6 +350,13 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
             auto_defaults,
             "mm_processor_cache_gb",
         )
+        if tensor_parallel_size > 1:
+            set_default_str_env(
+                "QWEN_VLLM_MM_PROCESSOR_CACHE_TYPE",
+                "shm",
+                auto_defaults,
+                "mm_processor_cache_type",
+            )
 
         auto_defaults["profile"] = profile
         auto_defaults["visible_gpu_count"] = torch.cuda.device_count()
@@ -356,5 +372,4 @@ def bootstrap_vllm_environment() -> dict[str, Any]:
         "tensor_parallel_size": tensor_parallel_size,
         "auto_defaults": auto_defaults or None,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-        "vllm_attention_backend": os.environ.get("VLLM_ATTENTION_BACKEND"),
     }

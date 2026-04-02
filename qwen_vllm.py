@@ -62,6 +62,7 @@ VLLM_MAX_NUM_SEQS = int(os.environ.get("QWEN_VLLM_MAX_NUM_SEQS", "1"))
 VLLM_LIMIT_MM_IMAGES = int(os.environ.get("QWEN_VLLM_LIMIT_MM_IMAGES", "1"))
 VLLM_LIMIT_MM_VIDEOS = int(os.environ.get("QWEN_VLLM_LIMIT_MM_VIDEOS", "0"))
 VLLM_MM_PROCESSOR_CACHE_GB = float(os.environ.get("QWEN_VLLM_MM_PROCESSOR_CACHE_GB", "0"))
+VLLM_MM_PROCESSOR_CACHE_TYPE = os.environ.get("QWEN_VLLM_MM_PROCESSOR_CACHE_TYPE", "").strip()
 VLLM_MM_ENCODER_TP_MODE = os.environ.get("QWEN_VLLM_MM_ENCODER_TP_MODE", "").strip()
 
 llm_kwargs: dict[str, Any] = {
@@ -79,6 +80,8 @@ llm_kwargs: dict[str, Any] = {
     },
     "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
 }
+if VLLM_MM_PROCESSOR_CACHE_TYPE:
+    llm_kwargs["mm_processor_cache_type"] = VLLM_MM_PROCESSOR_CACHE_TYPE
 if VLLM_MM_ENCODER_TP_MODE:
     llm_kwargs["mm_encoder_tp_mode"] = VLLM_MM_ENCODER_TP_MODE
 
@@ -107,9 +110,9 @@ def get_llm() -> LLM:
                     "video": VLLM_LIMIT_MM_VIDEOS,
                 },
                 "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
+                "mm_processor_cache_type": VLLM_MM_PROCESSOR_CACHE_TYPE or None,
                 "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
                 "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
-                "vllm_attention_backend": VLLM_ENV_INFO["vllm_attention_backend"],
                 "auto_defaults": VLLM_AUTO_DEFAULTS or None,
             },
         )

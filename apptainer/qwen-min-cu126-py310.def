@@ -21,7 +21,6 @@ From: ubuntu:22.04
     rm -rf /var/lib/apt/lists/*
 
     python3 -m pip install --no-cache-dir --upgrade pip
-    python3 -m pip install --no-cache-dir uv
 
     python3 -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu126 \
@@ -33,7 +32,6 @@ From: ubuntu:22.04
 %environment
     export PYTHONUNBUFFERED=1
     export HF_HOME=${HF_HOME:-/hf-cache}
-    export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-/hf-cache}
 
 %runscript
     if [ "$#" -eq 0 ]; then
@@ -45,5 +43,4 @@ From: ubuntu:22.04
 %test
     set -eux
     /usr/bin/python3 --version
-    uv --version
     /usr/bin/python3 -c "import torch; print(torch.__version__)"
