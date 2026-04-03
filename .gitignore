@@ -40,6 +40,7 @@ token
 .hf-cache/
 .offload/
 models/
+qwen_vllm_runtime_config.json
 
 # Local input/output data
 test_images/output/

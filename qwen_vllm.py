@@ -8,9 +8,12 @@ from time import perf_counter
 from typing import Any
 
 from PIL import Image
-from qwen_vllm_env import bootstrap_vllm_environment
+VLLM_CONFIG_PATH = Path("qwen_vllm_runtime_config.json")
+with VLLM_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+    VLLM_RUNTIME_CONFIG = json.load(handle)
 
-VLLM_ENV_INFO = bootstrap_vllm_environment()
+if VLLM_RUNTIME_CONFIG["cuda_visible_devices"] and not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(VLLM_RUNTIME_CONFIG["cuda_visible_devices"])
 
 import torch
 from vllm import LLM, SamplingParams
@@ -32,7 +35,7 @@ from qwen_schemas import (
 )
 from raw_answer_point import draw
 
-MODEL_PATH = os.environ.get("QWEN_MODEL_PATH", "./models/Qwen3-VL-8B-Instruct")
+MODEL_PATH = str(VLLM_RUNTIME_CONFIG["model_path"])
 OUTPUT_DIR = Path(os.environ.get("QWEN_OUTPUT_DIR", "test_images/output"))
 
 INTERPRET_MAX_NEW_TOKENS = int(os.environ.get("QWEN_INTERPRET_MAX_NEW_TOKENS", "160"))
@@ -47,23 +50,18 @@ GROUND_MAX_NEW_TOKENS_BY_MODE = {
 NORMALIZED_COORD_MAX = 1000
 DEFAULT_RANDOM_TEXT_LENGTH = 12
 
-
-def resolve_tensor_parallel_size() -> int:
-    return int(VLLM_ENV_INFO["tensor_parallel_size"])
-
-
-VLLM_TENSOR_PARALLEL_SIZE = resolve_tensor_parallel_size()
-VLLM_AUTO_DEFAULTS = VLLM_ENV_INFO["auto_defaults"]
-VLLM_DTYPE = os.environ.get("QWEN_VLLM_DTYPE", "auto").strip() or "auto"
-VLLM_GPU_MEMORY_UTILIZATION = float(os.environ.get("QWEN_VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
-VLLM_CPU_OFFLOAD_GB = float(os.environ.get("QWEN_VLLM_CPU_OFFLOAD_GB", "0"))
-VLLM_MAX_MODEL_LEN = int(os.environ.get("QWEN_VLLM_MAX_MODEL_LEN", "8192"))
-VLLM_MAX_NUM_SEQS = int(os.environ.get("QWEN_VLLM_MAX_NUM_SEQS", "1"))
-VLLM_LIMIT_MM_IMAGES = int(os.environ.get("QWEN_VLLM_LIMIT_MM_IMAGES", "1"))
-VLLM_LIMIT_MM_VIDEOS = int(os.environ.get("QWEN_VLLM_LIMIT_MM_VIDEOS", "0"))
-VLLM_MM_PROCESSOR_CACHE_GB = float(os.environ.get("QWEN_VLLM_MM_PROCESSOR_CACHE_GB", "0"))
-VLLM_MM_PROCESSOR_CACHE_TYPE = os.environ.get("QWEN_VLLM_MM_PROCESSOR_CACHE_TYPE", "").strip()
-VLLM_MM_ENCODER_TP_MODE = os.environ.get("QWEN_VLLM_MM_ENCODER_TP_MODE", "").strip()
+VLLM_TENSOR_PARALLEL_SIZE = int(VLLM_RUNTIME_CONFIG["tensor_parallel_size"])
+VLLM_AUTO_DEFAULTS = VLLM_RUNTIME_CONFIG["auto_defaults"]
+VLLM_DTYPE = str(VLLM_RUNTIME_CONFIG["dtype"])
+VLLM_GPU_MEMORY_UTILIZATION = float(VLLM_RUNTIME_CONFIG["gpu_memory_utilization"])
+VLLM_CPU_OFFLOAD_GB = float(VLLM_RUNTIME_CONFIG["cpu_offload_gb"])
+VLLM_MAX_MODEL_LEN = int(VLLM_RUNTIME_CONFIG["max_model_len"])
+VLLM_MAX_NUM_SEQS = int(VLLM_RUNTIME_CONFIG["max_num_seqs"])
+VLLM_LIMIT_MM_IMAGES = int(VLLM_RUNTIME_CONFIG["limit_mm_per_prompt"]["image"])
+VLLM_LIMIT_MM_VIDEOS = int(VLLM_RUNTIME_CONFIG["limit_mm_per_prompt"]["video"])
+VLLM_MM_PROCESSOR_CACHE_GB = float(VLLM_RUNTIME_CONFIG["mm_processor_cache_gb"])
+VLLM_MM_PROCESSOR_CACHE_TYPE = str(VLLM_RUNTIME_CONFIG["mm_processor_cache_type"] or "").strip()
+VLLM_MM_ENCODER_TP_MODE = str(VLLM_RUNTIME_CONFIG["mm_encoder_tp_mode"] or "").strip()
 
 llm_kwargs: dict[str, Any] = {
     "model": MODEL_PATH,
@@ -112,7 +110,8 @@ def get_llm() -> LLM:
                 "mm_processor_cache_gb": VLLM_MM_PROCESSOR_CACHE_GB,
                 "mm_processor_cache_type": VLLM_MM_PROCESSOR_CACHE_TYPE or None,
                 "mm_encoder_tp_mode": VLLM_MM_ENCODER_TP_MODE or None,
-                "cuda_visible_devices": VLLM_ENV_INFO["cuda_visible_devices"],
+                "cuda_visible_devices": VLLM_RUNTIME_CONFIG["cuda_visible_devices"],
+                "config_path": str(VLLM_CONFIG_PATH.resolve()),
                 "auto_defaults": VLLM_AUTO_DEFAULTS or None,
             },
         )
@@ -520,9 +519,6 @@ def ask_image_json(image_path: str, question: str, mode: str, max_retries: int =
 
 
 if __name__ == "__main__":
-    import multiprocessing
-
-    multiprocessing.freeze_support()
     img = "test_images/input/rozetka_50.png"
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = get_output_dir()
