@@ -20,17 +20,23 @@ def _truncate_text(text: str, max_chars: int = MAX_LOG_TEXT_CHARS) -> str:
 
 
 def _format_payload(payload: Any) -> str:
-    if isinstance(payload, dict) and "hf_device_map" in payload:
-        try:
-            return json.dumps(payload, ensure_ascii=False, indent=2)
-        except Exception:
-            return repr(payload)
     if isinstance(payload, str):
         return _truncate_text(payload)
     try:
         return _truncate_text(json.dumps(payload, ensure_ascii=False, indent=2))
     except Exception:
         return _truncate_text(repr(payload))
+
+
+def _print_hf_device_map(hf_device_map: Any) -> None:
+    print("[qwen:hf_device_map]", file=sys.stderr, flush=True)
+    if not isinstance(hf_device_map, dict):
+        print(repr(hf_device_map), file=sys.stderr, flush=True)
+        return
+
+    for key in sorted(hf_device_map):
+        value = hf_device_map[key]
+        print(f"{key}: {value}", file=sys.stderr, flush=True)
 
 
 def log_event(label: str, message: str | None = None, payload: Any | None = None) -> None:
@@ -44,6 +50,12 @@ def log_event(label: str, message: str | None = None, payload: Any | None = None
         print(header, file=sys.stderr, flush=True)
 
     if payload is not None:
+        if isinstance(payload, dict) and "hf_device_map" in payload:
+            truncated_payload = dict(payload)
+            hf_device_map = truncated_payload.pop("hf_device_map")
+            print(_format_payload(truncated_payload), file=sys.stderr, flush=True)
+            _print_hf_device_map(hf_device_map)
+            return
         print(_format_payload(payload), file=sys.stderr, flush=True)
 
 
