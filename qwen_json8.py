@@ -257,14 +257,13 @@ def run_vision_model(image_path: str, user_text: str, mode: str) -> str:
         tokenize=False,
         add_generation_prompt=True,
     )
-    images, videos = process_vision_info(
+    images, _ = process_vision_info(
         messages,
         image_patch_size=get_image_patch_size(),
     )
     inputs = processor(
         text=text,
         images=images,
-        videos=videos,
         do_resize=False,
         return_tensors="pt",
     )
@@ -302,7 +301,7 @@ def run_vision_model(image_path: str, user_text: str, mode: str) -> str:
             "output_tokens": output_token_count,
             "mode": mode,
             "image_count": len(images),
-            "video_count": len(videos),
+            "video_count": 0,
         },
     )
     log_event("vision_model.output", payload=result)
