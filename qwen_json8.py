@@ -34,6 +34,9 @@ REQUESTED_BACKEND = os.environ.get("QWEN_BACKEND", "auto").strip().lower()
 if REQUESTED_BACKEND in {"auto", "rocm"}:
     # This flag must be present before ROCm attention kernels are selected.
     os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "8")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -85,6 +88,19 @@ def resolve_attn_implementation() -> str:
         return "sdpa"
 
 
+def resolve_max_memooptiry() -> dict[int | str, str] | None:
+    if not torch.cuda.is_available():
+        return None
+
+    max_memory: dict[int | str, str] = {}
+    for index in range(torch.cuda.device_count()):
+        total_gib = torch.cuda.get_device_properties(index).total_memory / (1024**3)
+        gpu_limit_gib = round(total_gib * 0.88, 2)
+        max_memory[index] = f"{gpu_limit_gib:.2f}GiB"
+
+    return max_memory
+
+
 if REQUESTED_BACKEND not in BACKEND_ALIASES:
     raise ValueError("QWEN_BACKEND must be one of: auto, cuda, rocm")
 
@@ -104,13 +120,17 @@ else:
 DEVICE_MAP = "auto"
 DTYPE = resolve_dtype(ACTIVE_BACKEND)
 ATTN_IMPLEMENTATION = resolve_attn_implementation()
+MAX_MEMORY = resolve_max_memory()
 
 model = AutoModelForImageTextToText.from_pretrained(
     MODEL_PATH,
     dtype=DTYPE,
     device_map=DEVICE_MAP,
     attn_implementation=ATTN_IMPLEMENTATION,
+    max_memory=MAX_MEMORY,
+    low_cpu_mem_usage=True,
 )
+model.eval()
 processor = AutoProcessor.from_pretrained(MODEL_PATH)
 log_event(
     "runtime.config",
@@ -123,6 +143,10 @@ log_event(
         "dtype": str(DTYPE),
         "attn_implementation": ATTN_IMPLEMENTATION,
         "model_path": MODEL_PATH,
+        "max_memory": MAX_MEMORY,
+        "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
+        "tokenizers_parallelism": os.environ.get("TOKENIZERS_PARALLELISM"),
+        "pytorch_cuda_alloc_conf": os.environ.get("PYTORCH_CUDA_ALLOC_CONF"),
     },
 )
 log_resource_snapshot("runtime.resources", torch_module=torch, model=model)
@@ -202,7 +226,7 @@ def resolve_ground_max_new_tokens(mode: str) -> int:
 def build_generation_config(max_new_tokens: int) -> Any:
     generation_config = deepcopy(model.generation_config)
     generation_config.max_new_tokens = max_new_tokens
-    generation_config.use_cache = True
+    generation_config.use_cache = False
     generation_config.do_sample = False
     generation_config.temperature = None
     generation_config.top_p = None
