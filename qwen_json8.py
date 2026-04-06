@@ -95,7 +95,7 @@ def resolve_max_memory() -> dict[int | str, str] | None:
     max_memory: dict[int | str, str] = {}
     for index in range(torch.cuda.device_count()):
         total_gib = torch.cuda.get_device_properties(index).total_memory / (1024**3)
-        gpu_limit_gib = round(total_gib * 0.88, 2)
+        gpu_limit_gib = round(total_gib * 0.92, 2)
         max_memory[index] = f"{gpu_limit_gib:.2f}GiB"
     max_memory["cpu"] = "96GiB"
 
@@ -227,7 +227,7 @@ def resolve_ground_max_new_tokens(mode: str) -> int:
 def build_generation_config(max_new_tokens: int) -> Any:
     generation_config = deepcopy(model.generation_config)
     generation_config.max_new_tokens = max_new_tokens
-    generation_config.use_cache = False
+    generation_config.use_cache = True
     generation_config.do_sample = False
     generation_config.temperature = None
     generation_config.top_p = None
