@@ -20,6 +20,11 @@ def _truncate_text(text: str, max_chars: int = MAX_LOG_TEXT_CHARS) -> str:
 
 
 def _format_payload(payload: Any) -> str:
+    if isinstance(payload, dict) and "hf_device_map" in payload:
+        try:
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        except Exception:
+            return repr(payload)
     if isinstance(payload, str):
         return _truncate_text(payload)
     try:

@@ -88,7 +88,7 @@ def resolve_attn_implementation() -> str:
         return "sdpa"
 
 
-def resolve_max_memooptiry() -> dict[int | str, str] | None:
+def resolve_max_memory() -> dict[int | str, str] | None:
     if not torch.cuda.is_available():
         return None
 
@@ -97,6 +97,7 @@ def resolve_max_memooptiry() -> dict[int | str, str] | None:
         total_gib = torch.cuda.get_device_properties(index).total_memory / (1024**3)
         gpu_limit_gib = round(total_gib * 0.88, 2)
         max_memory[index] = f"{gpu_limit_gib:.2f}GiB"
+    max_memory["cpu"] = "96GiB"
 
     return max_memory
 
