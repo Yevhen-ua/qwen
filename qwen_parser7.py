@@ -2,6 +2,8 @@ import json
 import re
 from typing import Any, Callable
 
+import dirtyjson
+
 from qwen_logging import log_event, log_retry
 from qwen_prompts import SYSTEM_TEXT_INTERPRET_V2, build_interpret_prompt_v2
 
@@ -34,7 +36,10 @@ def extract_json(text: str) -> dict[str, Any]:
         raise ValueError(f"JSON object not found in model output: {text!r}")
 
     raw = text[start : end + 1]
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return dirtyjson.loads(raw)
 
 
 def validate_interpret_output(data: dict[str, Any], mode: str) -> dict[str, Any]:

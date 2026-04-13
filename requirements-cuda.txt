@@ -14,3 +14,4 @@ pillow>=10.0.0
 safetensors>=0.4.5
 qwen-vl-utils==0.0.14
 jsonschema>=4.23.0
+dirtyjson>=1.0.8
