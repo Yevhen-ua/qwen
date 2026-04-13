@@ -98,6 +98,49 @@ def _coord_schema(coord_max: int) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=None)
+def _input_output_validator(coord_max: int) -> Draft202012Validator:
+    return Draft202012Validator(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["status", "x", "y", "text", "comment"],
+            "properties": {
+                "status": {"enum": ["found", "not_found", "ambiguous"]},
+                "x": _coord_schema(coord_max),
+                "y": _coord_schema(coord_max),
+                "text": {"type": "string"},
+                "comment": {"type": "string"},
+            },
+            "allOf": [
+                {
+                    "if": {"properties": {"status": {"const": "found"}}},
+                    "then": {
+                        "properties": {
+                            "x": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": coord_max,
+                            },
+                            "y": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": coord_max,
+                            },
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "x": {"type": "null"},
+                            "y": {"type": "null"},
+                        }
+                    },
+                }
+            ],
+        }
+    )
+
+
+@lru_cache(maxsize=None)
 def _point_output_validator(coord_max: int) -> Draft202012Validator:
     return Draft202012Validator(
         {
@@ -231,6 +274,14 @@ def validate_point_output(data: dict[str, Any], coord_max: int) -> dict[str, Any
         _point_output_validator(coord_max),
         data,
         "invalid point output",
+    )
+
+
+def validate_input_output(data: dict[str, Any], coord_max: int) -> dict[str, Any]:
+    return _validate_with_schema(
+        _input_output_validator(coord_max),
+        data,
+        "invalid input output",
     )
 
 
