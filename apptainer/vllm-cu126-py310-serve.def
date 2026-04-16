@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        openssh-client \
+        python3 \
+        python3-pip
+    rm -rf /var/lib/apt/lists/*
+
+    python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+    python3 -m pip install --no-cache-dir \
+        "vllm>=0.19.0" \
+        "qwen-vl-utils>=0.0.14"
+
+    mkdir -p /workspace /models /hf-cache /hf-cache/hub /hf-cache/vllm /outputs /root/.ssh
+    chmod 700 /root/.ssh
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export HF_HOME=${HF_HOME:-/hf-cache}
+    export HF_HUB_CACHE=${HF_HUB_CACHE:-/hf-cache/hub}
+    export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-/hf-cache/vllm}
+    export VLLM_RPC_BASE_PATH=${VLLM_RPC_BASE_PATH:-/dev/shm/vllm-rpc}
+    export VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=${VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:-1}
+
+%runscript
+    mkdir -p "${HF_HOME}" "${HF_HUB_CACHE}" "${VLLM_CACHE_ROOT}" "${VLLM_RPC_BASE_PATH}"
+    cd /workspace
+
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+
+    exec "$@"
+
+%test
+    set -eux
+    /usr/bin/python3 --version
+    ssh -V
+    /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__)"
