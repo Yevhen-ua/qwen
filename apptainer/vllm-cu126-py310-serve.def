@@ -25,9 +25,13 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
 %environment
     export PYTHONUNBUFFERED=1
+    export DO_NOT_TRACK=${DO_NOT_TRACK:-1}
     export HF_HOME=${HF_HOME:-/hf-cache}
     export HF_HUB_CACHE=${HF_HUB_CACHE:-/hf-cache/hub}
+    export HF_HUB_DISABLE_TELEMETRY=${HF_HUB_DISABLE_TELEMETRY:-1}
+    export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
     export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-/hf-cache/vllm}
+    export VLLM_NO_USAGE_STATS=${VLLM_NO_USAGE_STATS:-1}
     export VLLM_RPC_BASE_PATH=${VLLM_RPC_BASE_PATH:-/dev/shm/vllm-rpc}
     export VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=${VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:-1}
 
