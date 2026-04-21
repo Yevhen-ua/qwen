@@ -5,6 +5,8 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
+    export CUDA_HOME=/usr/local/cuda
+    export CUDA_STUB="${CUDA_HOME}/lib64/stubs"
 
     apt-get update
     apt-get install -y --no-install-recommends \
@@ -20,6 +22,12 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     rm -rf /var/lib/apt/lists/*
 
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+    # The build container has CUDA toolkit libs but no host driver; expose the stub
+    # driver library so linking against libggml-cuda succeeds during image build.
+    ln -sf "${CUDA_STUB}/libcuda.so" "${CUDA_STUB}/libcuda.so.1"
+    export LIBRARY_PATH="${CUDA_STUB}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+    export LD_LIBRARY_PATH="${CUDA_STUB}:${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
     git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp
     cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
