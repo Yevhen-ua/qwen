@@ -36,6 +36,14 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
         -DGGML_NATIVE=OFF
     cmake --build /opt/llama.cpp/build --config Release --target llama-server -j"$(nproc)"
     install -m 0755 /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+    strip /usr/local/bin/llama-server || true
+
+    rm -rf /opt/llama.cpp
+    apt-get purge -y --auto-remove \
+        build-essential \
+        cmake \
+        python3-dev
+    rm -rf /var/lib/apt/lists/*
 
     mkdir -p /workspace /workspace/.hf-cache /workspace/.hf-cache/hub /models /outputs /root/.ssh
     chmod 700 /root/.ssh
