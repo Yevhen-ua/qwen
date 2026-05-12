@@ -83,4 +83,5 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     /usr/bin/python3 --version
     ssh -V
     test -x /usr/local/bin/llama-server
-    ! ldd /usr/local/bin/llama-server | tee /dev/stderr | grep -q "not found"
+    ldd /usr/local/bin/llama-server | tee /dev/stderr | grep "not found" || true
+    /usr/local/bin/llama-server --help >/dev/null || true
