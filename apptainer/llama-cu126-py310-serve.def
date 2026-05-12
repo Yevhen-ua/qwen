@@ -40,7 +40,7 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_TESTS_INSTALL=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_BUILD_TOOLS=OFF \
+        -DLLAMA_BUILD_TOOLS=ON \
         -DLLAMA_TOOLS_INSTALL=OFF \
         -DGGML_NATIVE=OFF
     cmake --build /opt/llama.cpp/build --config Release --target llama-server -j"$(nproc)"
