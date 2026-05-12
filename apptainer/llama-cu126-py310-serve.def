@@ -36,7 +36,9 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
         -DCMAKE_CUDA_ARCHITECTURES=61-real\;75-real \
         -DGGML_NATIVE=OFF
     cmake --build /opt/llama.cpp/build --config Release --target llama-server -j"$(nproc)"
+    cmake --install /opt/llama.cpp/build --prefix /usr/local
     install -m 0755 /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+    ldconfig
     strip /usr/local/bin/llama-server || true
 
     rm -rf /opt/llama.cpp
