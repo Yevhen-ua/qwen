@@ -32,8 +32,16 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp
     cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=ON \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=61-real\;75-real \
+        -DLLAMA_BUILD_COMMON=ON \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_TESTS_INSTALL=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_TOOLS=OFF \
+        -DLLAMA_TOOLS_INSTALL=OFF \
         -DGGML_NATIVE=OFF
     cmake --build /opt/llama.cpp/build --config Release --target llama-server -j"$(nproc)"
     cmake --install /opt/llama.cpp/build --prefix /usr/local
