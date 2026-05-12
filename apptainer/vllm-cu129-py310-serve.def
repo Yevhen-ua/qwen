@@ -58,3 +58,5 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
     /usr/bin/python3 --version
     ssh -V
     /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__)"
+    ldd /usr/local/bin/vllm | tee /dev/stderr | grep "not found" || true
+    /usr/local/bin/vllm --help >/dev/null || true
