@@ -8,11 +8,14 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
+    export CUDA_VERSION=129
+    export CPU_ARCH=x86_64
 
     apt-get update
     apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        curl \
         openssh-client \
         python3 \
         python3-dev \
@@ -21,9 +24,13 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
     rm -rf /var/lib/apt/lists/*
 
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel uv
+    export VLLM_VERSION="$(curl -fsSL https://api.github.com/repos/vllm-project/vllm/releases/latest | python3 -c "import json, sys; print(json.load(sys.stdin)['tag_name'].removeprefix('v'))")"
 
-    # Keep CUDA runtime, PyTorch wheels, and vLLM wheels on the same CUDA line.
-    uv pip install --system --torch-backend=cu129 vllm
+    # Install an explicit cu129 vLLM wheel; the torch backend only selects the
+    # PyTorch index and does not constrain the vLLM binary variant.
+    uv pip install --system \
+        "https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_35_${CPU_ARCH}.whl" \
+        --extra-index-url "https://download.pytorch.org/whl/cu${CUDA_VERSION}"
     python3 -m pip uninstall -y uv
     python3 -m pip install --no-cache-dir \
         "qwen-vl-utils"
@@ -34,9 +41,8 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
 %environment
     export PYTHONUNBUFFERED=1
     export CUDA_HOME=/usr/local/cuda
-    export PYTHON_SITE_PACKAGES=/usr/local/lib/python3.10/dist-packages
-    export PATH=/usr/local/cuda/bin:/usr/local/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cusolver/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cusparse/lib:/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
     export DO_NOT_TRACK=${DO_NOT_TRACK:-1}
     export HF_HOME=${HF_HOME:-/workspace/.hf-cache}
     export HF_HUB_CACHE=${HF_HUB_CACHE:-/workspace/.hf-cache/hub}
@@ -58,6 +64,6 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
     set -eux
     /usr/bin/python3 --version
     ssh -V
-    /usr/bin/python3 -c "import ctypes; ctypes.CDLL('libcudart.so.13'); import torch; import vllm; print(torch.__version__); print(vllm.__version__)"
-    ldd /usr/local/bin/vllm | tee /dev/stderr | grep 'not found' || true
-    /usr/local/bin/vllm --help >/dev/null || true
+    /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__)"
+    ldd /usr/local/lib/python3.10/dist-packages/vllm/_C.abi3.so | tee /dev/stderr
+    ! ldd /usr/local/lib/python3.10/dist-packages/vllm/_C.abi3.so | grep -F "libcudart.so.13"
