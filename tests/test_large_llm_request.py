@@ -1,5 +1,7 @@
 import math
 import json
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from llm_connector import encode_image_as_data_url
@@ -8,7 +10,7 @@ from prompts import SYSTEM_TEXT
 BASE_DIR = Path(__file__).resolve().parents[1]
 APPROX_IMG_TOKENS = 900
 TARGET_TOKENS = 30000
-CHARS_PER_TOKEN = 3.6
+CHARS_PER_TOKEN = 3.0
 MAX_RESPONSE_TOKENS = 500
 TEMPERATURE = 0.0
 
@@ -56,8 +58,13 @@ def fill_prompt(tokens_cnt: int) -> str:
     return "".join(parts)
 
 
-def build_user_text(dom_text: str, target_tokens: int, chars_per_token: float) -> str:
-    static_text = build_static_text()
+def build_user_text(dom_text: str, target_tokens: int, chars_per_token: float, prompt_name: str) -> str:
+    static_text = (
+        f"request_name: {prompt_name}\n"
+        f"request_timestamp: {datetime.now(UTC).isoformat()}\n"
+        f"request_uuid: {uuid.uuid4()}\n\n"
+        f"{build_static_text()}"
+    )
     target_text_tokens = max(target_tokens - APPROX_IMG_TOKENS, 0)
     target_chars = int(target_text_tokens * chars_per_token)
     dom_char_budget = max(target_chars - len(static_text), 0)
@@ -69,14 +76,15 @@ def build_user_text(dom_text: str, target_tokens: int, chars_per_token: float) -
     return user_text
 
 
-def test_prompt_1(llmconnector):
-    image_path = BASE_DIR / "test_images" / "input" / "roz_test_01.png"
-    dom_path = BASE_DIR / "test_images" / "input" / "roz_test_01_data"
+def run_prompt(llmconnector, prompt_name: str, image_name: str, dom_name: str) -> dict:
+    image_path = BASE_DIR / "test_images" / "input" / image_name
+    dom_path = BASE_DIR / "test_images" / "input" / dom_name
     dom_text = dom_path.read_text(encoding="utf-8")
     user_text = build_user_text(
         dom_text=dom_text,
         target_tokens=TARGET_TOKENS,
         chars_per_token=CHARS_PER_TOKEN,
+        prompt_name=prompt_name,
     )
 
     payload = {
@@ -100,5 +108,64 @@ def test_prompt_1(llmconnector):
 
     response = json.loads(llmconnector.request(payload))
     print(response.get("usage"))
+    return response
+
+
+def test_prompt_1(llmconnector):
+    response = run_prompt(llmconnector, "prompt_1", "roz_test_01.png", "roz_test_01_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_2(llmconnector):
+    response = run_prompt(llmconnector, "prompt_2", "roz_test_02.png", "roz_test_02_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_3(llmconnector):
+    response = run_prompt(llmconnector, "prompt_3", "roz_test_03.png", "roz_test_03_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_4(llmconnector):
+    response = run_prompt(llmconnector, "prompt_4", "roz_test_01.png", "roz_test_02_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_5(llmconnector):
+    response = run_prompt(llmconnector, "prompt_5", "roz_test_01.png", "roz_test_03_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_6(llmconnector):
+    response = run_prompt(llmconnector, "prompt_6", "roz_test_02.png", "roz_test_01_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_7(llmconnector):
+    response = run_prompt(llmconnector, "prompt_7", "roz_test_02.png", "roz_test_03_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_8(llmconnector):
+    response = run_prompt(llmconnector, "prompt_8", "roz_test_03.png", "roz_test_01_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_9(llmconnector):
+    response = run_prompt(llmconnector, "prompt_9", "roz_test_03.png", "roz_test_02_data")
+
+    assert isinstance(response, dict)
+
+
+def test_prompt_10(llmconnector):
+    response = run_prompt(llmconnector, "prompt_10", "roz_test_01.png", "roz_test_01_data")
 
     assert isinstance(response, dict)
