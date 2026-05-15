@@ -74,6 +74,23 @@ class LlmConnector:
 
     def request(
         self,
+        payload,
+    ):
+        try:
+            response = requests.post(self.api_url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            error_response = getattr(exc, "response", None)
+            if error_response is not None:
+                raise RuntimeError(
+                    f"LLM request failed: {exc}. Response body: {error_response.text}"
+                ) from exc
+            raise RuntimeError(f"LLM request failed: {exc}") from exc
+
+        return response.text
+
+    def request_with_mode(
+        self,
         mode,
         question,
         image_path,
@@ -103,7 +120,7 @@ class LlmConnector:
                             },
                         },
                     ],
-                }
+                },
             ],
         }
         if max_tokens is not None:
@@ -111,18 +128,7 @@ class LlmConnector:
         if temperature is not None:
             payload["temperature"] = temperature
 
-        try:
-            response = requests.post(self.api_url, json=payload, timeout=self.timeout)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            error_response = getattr(exc, "response", None)
-            if error_response is not None:
-                raise RuntimeError(
-                    f"LLM request failed: {exc}. Response body: {error_response.text}"
-                ) from exc
-            raise RuntimeError(f"LLM request failed: {exc}") from exc
-
-        response_payload = response.json()
+        response_payload = json.loads(self.request(payload=payload))
         content = response_payload["choices"][0]["message"]["content"]
         if isinstance(content, dict):
             return content
