@@ -13,13 +13,11 @@ from typing import Any
 from PIL import Image
 
 from qwen_logging import log_event, log_resource_snapshot
+from prompts import SYSTEM_TEXT
 from qwen_parser7 import (
     clean_single_line_text,
     extract_json,
     extract_requested_input_length,
-)
-from qwen_prompts import (
-    SYSTEM_TEXT_GROUND_V2,
 )
 from qwen_schemas import (
     validate_drag_output as validate_drag_output_schema,
@@ -266,7 +264,7 @@ def run_vision_model(image_path: str, user_text: str, mode: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": [{"type": "text", "text": SYSTEM_TEXT_GROUND_V2}],
+            "content": [{"type": "text", "text": SYSTEM_TEXT}],
         },
         {
             "role": "user",

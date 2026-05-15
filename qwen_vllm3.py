@@ -8,8 +8,8 @@ from PIL import Image
 from vllm import LLM, SamplingParams
 
 from qwen_logging import log_event, log_resource_snapshot
+from prompts import SYSTEM_TEXT
 from qwen_parser7 import extract_json
-from qwen_prompts import SYSTEM_TEXT_GROUND_V2
 from qwen_schemas import (
     validate_drag_output as validate_drag_output_schema,
     validate_exists_output as validate_exists_output_schema,
@@ -156,7 +156,7 @@ def run_vision_model(image_path, user_text, mode):
         image = handle.convert("RGB").copy()
 
     chat_messages = [
-        {"role": "system", "content": SYSTEM_TEXT_GROUND_V2},
+        {"role": "system", "content": SYSTEM_TEXT},
         {
             "role": "user",
             "content": [

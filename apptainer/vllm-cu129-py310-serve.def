@@ -29,7 +29,7 @@ From: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
     # Install an explicit cu129 vLLM wheel; the torch backend only selects the
     # PyTorch index and does not constrain the vLLM binary variant.
     uv pip install --system \
-        "https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_35_${CPU_ARCH}.whl" \
+        "https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_31_${CPU_ARCH}.whl" \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUDA_VERSION}"
     python3 -m pip uninstall -y uv
     python3 -m pip install --no-cache-dir \

@@ -10,7 +10,7 @@ import config
 from prompts import SYSTEM_TEXT, prom
 
 DEFAULT_API_URL = f"http://127.0.0.1:{config.SSH_LOCAL_PORT}/v1/chat/completions"
-DEFAULT_MODEL = "ui-grounder"
+DEFAULT_MODEL = config.MODEL
 
 
 def encode_image_as_data_url(image_path):
@@ -115,6 +115,11 @@ class LlmConnector:
             response = requests.post(self.api_url, json=payload, timeout=self.timeout)
             response.raise_for_status()
         except requests.RequestException as exc:
+            error_response = getattr(exc, "response", None)
+            if error_response is not None:
+                raise RuntimeError(
+                    f"LLM request failed: {exc}. Response body: {error_response.text}"
+                ) from exc
             raise RuntimeError(f"LLM request failed: {exc}") from exc
 
         response_payload = response.json()
