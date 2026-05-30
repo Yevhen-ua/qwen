@@ -36,7 +36,7 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     # Pin llama.cpp to a specific release tag instead of tracking the default branch.
     git init /opt/llama.cpp
     git -C /opt/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
-    git -C /opt/llama.cpp fetch --depth 1 origin refs/tags/b9219
+    git -C /opt/llama.cpp fetch --depth 1 origin refs/tags/b9436
     git -C /opt/llama.cpp checkout --detach FETCH_HEAD
     cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
@@ -55,7 +55,6 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
         -DGGML_NATIVE=OFF
     cmake --build /opt/llama.cpp/build --config Release --target llama-server -j4
     cmake --install /opt/llama.cpp/build --prefix /usr/local
-    install -m 0755 /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
     ldconfig
     strip /usr/local/bin/llama-server || true
 
@@ -74,6 +73,8 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     export CUDA_HOME=/usr/local/cuda
     export PATH=/usr/local/cuda/bin:/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    export CUDA_SCALE_LAUNCH_QUEUES=${CUDA_SCALE_LAUNCH_QUEUES:-4x}
+    export GGML_CUDA_P2P=${GGML_CUDA_P2P:-1}
     export DO_NOT_TRACK=${DO_NOT_TRACK:-1}
     export HF_HOME=${HF_HOME:-/workspace/.hf-cache}
     export HF_HUB_CACHE=${HF_HUB_CACHE:-/workspace/.hf-cache/hub}
