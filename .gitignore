@@ -39,7 +39,8 @@ token
 # Model weights, caches, and runtime artifacts
 .hf-cache/
 .offload/
-models/
+models/*
+!models/models.ini
 qwen_vllm_runtime_config.json
 
 # Local input/output data
