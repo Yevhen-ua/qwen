@@ -37,7 +37,7 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     python3 -m pip install --break-system-packages --no-cache-dir --ignore-installed uv
     export VLLM_VERSION=0.22.1
 
-    uv pip install --system \
+    uv pip install --system --break-system-packages \
         "https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl" \
         --extra-index-url "https://download.pytorch.org/whl/cu130"
     python3 -m pip uninstall -y --break-system-packages uv
