@@ -29,13 +29,12 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
         'Acquire::https::developer.download.nvidia.com::Verify-Host "false";' \
         > /etc/apt/apt.conf.d/99nvidia-no-verify-peer
     apt-get update
-    apt-cache madison libnccl2 libnccl-dev
     apt-get install -y --no-install-recommends \
         "libnccl-dev=2.29.3-1+cuda13.1" \
         "libnccl2=2.29.3-1+cuda13.1"
     rm -rf /var/lib/apt/lists/*
 
-    python3 -m pip install --break-system-packages --no-cache-dir --upgrade pip setuptools wheel uv
+    python3 -m pip install --break-system-packages --no-cache-dir --ignore-installed uv
     export VLLM_VERSION=0.22.1
 
     uv pip install --system \
