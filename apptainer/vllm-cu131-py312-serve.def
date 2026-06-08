@@ -24,8 +24,8 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     wget "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO_DISTRO}/${CPU_ARCH}/cuda-keyring_1.1-1_all.deb"
     dpkg -i cuda-keyring_1.1-1_all.deb
     rm -f cuda-keyring_1.1-1_all.deb
-    sed -i 's#https://developer.download.nvidia.com#http://developer.download.nvidia.com#g' /etc/apt/sources.list.d/cuda*.list
-    cat /etc/apt/sources.list.d/cuda*.list
+    grep -rl "https://developer.download.nvidia.com" /etc/apt | xargs -r sed -i 's#https://developer.download.nvidia.com#http://developer.download.nvidia.com#g'
+    grep -R "developer.download.nvidia.com" /etc/apt || true
     apt-get update
     apt-cache madison libnccl2 libnccl-dev
     apt-get install -y --no-install-recommends \
