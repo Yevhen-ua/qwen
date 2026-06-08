@@ -1,0 +1,105 @@
+Bootstrap: docker
+From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
+
+%files
+    SRK_Root_Cert.crt /usr/local/share/ca-certificates/SRK_Root_Cert.crt
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+    export CUDA_HOME=/usr/local/cuda
+    export CUDA_STUB="${CUDA_HOME}/lib64/stubs"
+    export CUDA_REPO_DISTRO=ubuntu2404
+    export CPU_ARCH=x86_64
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        libgomp1 \
+        openssh-client \
+        wget \
+        python3 \
+        python3-dev \
+        python3-pip
+    wget "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO_DISTRO}/${CPU_ARCH}/cuda-keyring_1.1-1_all.deb"
+    dpkg -i cuda-keyring_1.1-1_all.deb
+    rm -f cuda-keyring_1.1-1_all.deb
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        "libnccl-dev=2.30.4-1+cuda13.1" \
+        "libnccl2=2.30.4-1+cuda13.1"
+    update-ca-certificates
+    rm -rf /var/lib/apt/lists/*
+
+    ln -sf "${CUDA_STUB}/libcuda.so" "${CUDA_STUB}/libcuda.so.1"
+    export LIBRARY_PATH="${CUDA_STUB}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+    export LD_LIBRARY_PATH="${CUDA_STUB}:${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+    git clone --branch b9568 --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp
+    cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES=61-real\;75-real \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_LTO=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_CUDA=ON \
+        -DGGML_CUDA_FA=ON \
+        -DGGML_CUDA_GRAPHS=ON \
+        -DGGML_CUDA_NCCL=ON \
+        -DLLAMA_BUILD_COMMON=ON \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_BUILD_TOOLS=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_TESTS_INSTALL=OFF \
+        -DLLAMA_TOOLS_INSTALL=OFF
+    cmake --build /opt/llama.cpp/build --config Release --target llama-server-impl llama-server -j4
+    cmake --install /opt/llama.cpp/build --prefix /usr/local --strip
+    ldconfig
+
+    rm -rf /opt/llama.cpp
+    apt-get purge -y \
+        build-essential \
+        cmake \
+        python3-dev
+    rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /workspace /workspace/.hf-cache /workspace/.hf-cache/hub /models /outputs /root/.ssh
+    chmod 700 /root/.ssh
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export DO_NOT_TRACK=${DO_NOT_TRACK:-1}
+
+    export CUDA_HOME=/usr/local/cuda
+    export PATH=/usr/local/cuda/bin:/usr/local/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+    export CUDA_SCALE_LAUNCH_QUEUES=${CUDA_SCALE_LAUNCH_QUEUES:-4x}
+    export GGML_CUDA_P2P=${GGML_CUDA_P2P:-1}
+
+    export HF_HOME=${HF_HOME:-/workspace/.hf-cache}
+    export HF_HUB_CACHE=${HF_HUB_CACHE:-/workspace/.hf-cache/hub}
+    export HF_HUB_DISABLE_TELEMETRY=${HF_HUB_DISABLE_TELEMETRY:-1}
+    export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+
+%runscript
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+
+    exec "$@"
+
+%test
+    set -eux
+    /usr/bin/python3 -c "import sys; print(sys.version); assert sys.version_info[:2] == (3, 12)"
+    ssh -V
+    dpkg -s libnccl2 libnccl-dev >/dev/null
+    test -f /usr/include/nccl.h
+    test -x /usr/local/bin/llama-server
+    ldd /usr/local/bin/llama-server | tee /dev/stderr | grep "not found" || true
+    /usr/local/bin/llama-server --help >/dev/null || true
