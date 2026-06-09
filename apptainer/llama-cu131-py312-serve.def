@@ -46,7 +46,7 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     git clone --branch b9581 --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp
     cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_ARCHITECTURES=61-real\;75-real \
+        -DCMAKE_CUDA_ARCHITECTURES=75-real \
         -DBUILD_SHARED_LIBS=OFF \
         -DGGML_LTO=ON \
         -DGGML_NATIVE=OFF \

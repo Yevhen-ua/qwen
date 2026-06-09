@@ -8,8 +8,12 @@
 #SBATCH --gres=gpu:rtx2080ti:4
 #SBATCH --time=30-00:00:00
 #SBATCH -J my_gpu_4
+#SBATCH -o /projects/sec_qa/logs/%x-%j.out
+#SBATCH -e /projects/sec_qa/logs/%x-%j.err
 
 SESSION="inference"
+
+mkdir -p /projects/sec_qa/logs
 
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux new-session -d -s "$SESSION" -n shell
@@ -20,4 +24,3 @@ trap 'exit 0' TERM INT
 while true; do
     sleep 300
 done
-
