@@ -61,7 +61,6 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     /usr/bin/python3 -c "import sys; print(sys.version); assert sys.version_info[:2] == (3, 12)"
     ssh -V
     /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__); print(torch.version.cuda); assert str(torch.version.cuda).startswith('13.')"
-    VLLM_EXT_SO="$(/usr/bin/python3 -c 'import pathlib, vllm._C as ext; print(pathlib.Path(ext.__file__).resolve())')"
-    ldd "$VLLM_EXT_SO" | tee /dev/stderr
-    ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.13"
-    ! ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.12"
+    ldd /usr/local/lib/python3.12/dist-packages/vllm/_C.abi3.so | tee /dev/stderr
+    ldd /usr/local/lib/python3.12/dist-packages/vllm/_C.abi3.so | grep -F "libcudart.so.13"
+    ! ldd /usr/local/lib/python3.12/dist-packages/vllm/_C.abi3.so | grep -F "libcudart.so.12"
