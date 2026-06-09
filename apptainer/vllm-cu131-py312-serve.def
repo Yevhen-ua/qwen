@@ -33,15 +33,11 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
         "libnccl2=2.29.3-1+cuda13.1"
     rm -rf /var/lib/apt/lists/*
 
-    python3 -m pip install --break-system-packages --no-cache-dir --ignore-installed uv "setuptools<81.0.0"
     export VLLM_VERSION=0.22.1
 
-    uv pip install --system --break-system-packages \
-        "https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl" \
+    python3 -m pip install --break-system-packages --no-cache-dir --ignore-installed \
+        "vllm==${VLLM_VERSION}" \
         --extra-index-url "https://download.pytorch.org/whl/cu130"
-    python3 -m pip uninstall -y --break-system-packages uv
-    python3 -m pip install --break-system-packages --no-cache-dir \
-        "qwen-vl-utils"
 
     mkdir -p /workspace /workspace/.hf-cache /workspace/.hf-cache/hub /outputs /root/.ssh
     chmod 700 /root/.ssh
@@ -79,7 +75,28 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     ssh -V
     dpkg -s libnccl2 >/dev/null
     /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__); print(torch.version.cuda); assert str(torch.version.cuda).startswith('13.')"
+    /usr/bin/python3 -m pip show nvidia-nccl-cu13 || true
+    /usr/bin/python3 - <<'PY'
+import pathlib
+import torch
+
+try:
+    import nvidia.nccl
+except Exception as exc:
+    print(f"nvidia.nccl import failed: {exc!r}")
+else:
+    nccl_pkg = pathlib.Path(nvidia.nccl.__file__).resolve()
+    print(f"nvidia.nccl package: {nccl_pkg}")
+    for path in nccl_pkg.parents[1].glob("**/libnccl.so*"):
+        print(f"nvidia.nccl library: {path}")
+
+torch_lib = pathlib.Path(torch.__file__).resolve().parent / "lib" / "libtorch_cuda.so"
+print(f"torch CUDA library: {torch_lib}")
+PY
+    TORCH_CUDA_SO="$(/usr/bin/python3 -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib" / "libtorch_cuda.so")')"
+    ldd "$TORCH_CUDA_SO" | tee /dev/stderr | grep -i nccl || true
     VLLM_EXT_SO="$(/usr/bin/python3 -c 'import pathlib, vllm._C as ext; print(pathlib.Path(ext.__file__).resolve())')"
     ldd "$VLLM_EXT_SO" | tee /dev/stderr
+    ldd "$VLLM_EXT_SO" | grep -i nccl || true
     ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.13"
     ! ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.12"
