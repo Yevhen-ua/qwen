@@ -8,29 +8,16 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
-    export CPU_ARCH=x86_64
-    export CUDA_REPO_DISTRO=ubuntu2404
 
     apt-get update
     apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         openssh-client \
-        wget \
         python3 \
         python3-dev \
         python3-pip
     update-ca-certificates
-    wget "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO_DISTRO}/${CPU_ARCH}/cuda-keyring_1.1-1_all.deb"
-    dpkg -i cuda-keyring_1.1-1_all.deb
-    rm -f cuda-keyring_1.1-1_all.deb
-    printf '%s\n' \
-        'Acquire::https::developer.download.nvidia.com::Verify-Peer "false";' \
-        'Acquire::https::developer.download.nvidia.com::Verify-Host "false";' \
-        > /etc/apt/apt.conf.d/99nvidia-no-verify-peer
-    apt-get update
-    apt-get install -y --no-install-recommends \
-        "libnccl2=2.29.3-1+cuda13.1"
     rm -rf /var/lib/apt/lists/*
 
     export VLLM_VERSION=0.22.1
@@ -73,13 +60,8 @@ From: nvidia/cuda:13.1.2-cudnn-devel-ubuntu24.04
     set -eux
     /usr/bin/python3 -c "import sys; print(sys.version); assert sys.version_info[:2] == (3, 12)"
     ssh -V
-    dpkg -s libnccl2 >/dev/null
     /usr/bin/python3 -c "import torch; import vllm; print(torch.__version__); print(vllm.__version__); print(torch.version.cuda); assert str(torch.version.cuda).startswith('13.')"
-    /usr/bin/python3 -m pip show nvidia-nccl-cu13 || true
-    TORCH_CUDA_SO="$(/usr/bin/python3 -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib" / "libtorch_cuda.so")')"
-    ldd "$TORCH_CUDA_SO" | tee /dev/stderr | grep -i nccl || true
     VLLM_EXT_SO="$(/usr/bin/python3 -c 'import pathlib, vllm._C as ext; print(pathlib.Path(ext.__file__).resolve())')"
     ldd "$VLLM_EXT_SO" | tee /dev/stderr
-    ldd "$VLLM_EXT_SO" | grep -i nccl || true
     ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.13"
     ! ldd "$VLLM_EXT_SO" | grep -F "libcudart.so.12"
