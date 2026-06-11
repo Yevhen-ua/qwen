@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export NO_PROXY=127.0.0.1,localhost
+export no_proxy=127.0.0.1,localhost
+
 DATA_DIR=/workspace/open-webui-data
 STATIC_DIR=/workspace/open-webui-static
 PLAYWRIGHT_MCP_OUTPUT_DIR=/workspace/playwright-mcp-output
