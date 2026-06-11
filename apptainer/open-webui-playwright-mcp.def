@@ -1,0 +1,82 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+    export OPEN_WEBUI_VERSION=0.9.6
+    export MCPO_VERSION=0.0.20
+    export PLAYWRIGHT_MCP_VERSION=0.0.76
+    export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        bash \
+        build-essential \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        git \
+        nodejs \
+        npm \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-venv
+    update-ca-certificates
+
+    python3 -m venv /opt/open-webui
+    /opt/open-webui/bin/python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+    /opt/open-webui/bin/python -m pip install --no-cache-dir \
+        "open-webui==${OPEN_WEBUI_VERSION}" \
+        "mcpo==${MCPO_VERSION}"
+    ln -sf /opt/open-webui/bin/open-webui /usr/local/bin/open-webui
+    ln -sf /opt/open-webui/bin/mcpo /usr/local/bin/mcpo
+
+    npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
+    npm cache clean --force
+
+    PLAYWRIGHT_BIN="$(npm root -g)/@playwright/mcp/node_modules/.bin/playwright"
+    "${PLAYWRIGHT_BIN}" install-deps chromium
+    "${PLAYWRIGHT_BIN}" install --no-shell chromium
+
+    apt-get purge -y build-essential python3-dev python3-pip
+    apt-get autoremove -y --purge
+    apt-get clean
+
+    mkdir -p /workspace
+
+    rm -rf /var/lib/apt/lists/* /root/.cache
+
+%environment
+    export PATH=/opt/open-webui/bin:$PATH
+    export PYTHONUNBUFFERED=1
+    export DO_NOT_TRACK=${DO_NOT_TRACK:-1}
+
+    export DATA_DIR=${DATA_DIR:-/workspace/open-webui-data}
+    export PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}
+
+%runscript
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+
+    exec "$@"
+
+%test
+    set -eux
+    . /etc/os-release
+    test "${VERSION_ID}" = "24.04"
+    python3 --version
+    node --version
+    npm --version
+    command -v open-webui
+    command -v mcpo
+    command -v playwright-mcp
+    /opt/open-webui/bin/python -c "import open_webui; print(open_webui.__file__)"
+    /opt/open-webui/bin/python -m pip show open-webui | grep -F "Version: 0.9.6"
+    /opt/open-webui/bin/python -m pip show mcpo | grep -F "Version: 0.0.20"
+    npm list -g --depth=0 "@playwright/mcp" | grep -F "@playwright/mcp@0.0.76"
+    playwright-mcp --help | grep -F -- "--port"
+    mcpo --help
