@@ -34,7 +34,13 @@ From: ubuntu:24.04
     ln -sf /opt/open-webui/bin/open-webui /usr/local/bin/open-webui
     ln -sf /opt/open-webui/bin/mcpo /usr/local/bin/mcpo
 
-    npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g \
+        --omit=dev \
+        --no-audit \
+        --no-fund \
+        --no-update-notifier \
+        --progress=false \
+        "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
     npm cache clean --force
 
     PLAYWRIGHT_BIN="$(npm root -g)/@playwright/mcp/node_modules/.bin/playwright"
