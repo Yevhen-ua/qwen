@@ -3,6 +3,7 @@ set -euo pipefail
 
 SESSION="inference"
 PORT="55144"
+ACTION="${1:-start}"
 
 JOB_ID="${SLURM_JOB_ID:?ERROR: run inside Slurm}"
 
@@ -18,6 +19,7 @@ SRUN_CMD="srun --jobid=$JOB_ID \
   --gres=gpu:${N_GPUS} \
   --cpus-per-task=${N_CPUS} \
   --kill-on-bad-exit=1 \
+  --quit-on-interrupt \
   --export=ALL"
 
 LLAMA_CMD="exec llama-server \
@@ -60,6 +62,53 @@ TUNNEL_CMD="ssh -N -R $PORT:127.0.0.1:$PORT some_user@106.125.46.169"
 has_window() {
   tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$1"
 }
+
+find_llama_step() {
+  squeue -h -s -j "$JOB_ID" -o "%i %j" | awk '$2 == "llama" { print $1; exit }'
+}
+
+stop_llama() {
+  local step_id
+  step_id="$(find_llama_step)"
+
+  if [[ -z "${step_id:-}" ]]; then
+    echo "llama step not found for job $JOB_ID" >&2
+    return 1
+  fi
+
+  echo "Stopping step $step_id"
+  scancel "$step_id"
+}
+
+kill_llama() {
+  local step_id
+  step_id="$(find_llama_step)"
+
+  if [[ -z "${step_id:-}" ]]; then
+    echo "llama step not found for job $JOB_ID" >&2
+    return 1
+  fi
+
+  echo "Killing step $step_id"
+  scancel --signal=KILL "$step_id"
+}
+
+case "$ACTION" in
+  start)
+    ;;
+  stop-llama)
+    stop_llama
+    exit 0
+    ;;
+  kill-llama)
+    kill_llama
+    exit 0
+    ;;
+  *)
+    echo "Usage: $0 [start|stop-llama|kill-llama]" >&2
+    exit 2
+    ;;
+esac
 
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux new-session -d -s "$SESSION"
